@@ -1,0 +1,6 @@
+tetgen
+numpy
+numpy-stl
+tk
+matplotlib
+
