@@ -36,12 +36,12 @@ class Boundary:
         
         return self.vecDisp
     
-    # 荷重を追加する
+    # 荷重を追加する（累積）
     def addForce(self, nodeNo, fx, fy, fz):
         
-        self.vecForce[self.nodeDof * (nodeNo - 1) + 0] = fx
-        self.vecForce[self.nodeDof * (nodeNo - 1) + 1] = fy
-        self.vecForce[self.nodeDof * (nodeNo - 1) + 2] = fz
+        self.vecForce[self.nodeDof * (nodeNo - 1) + 0] += fx
+        self.vecForce[self.nodeDof * (nodeNo - 1) + 1] += fy
+        self.vecForce[self.nodeDof * (nodeNo - 1) + 2] += fz
     
     # 境界条件から荷重ベクトルを作成する
     def makeForceVector(self):

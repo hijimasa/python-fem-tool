@@ -239,5 +239,40 @@ class FEM:
             displacement.append([self.vecDisp[self.nodeDof * i], self.vecDisp[self.nodeDof * i + 1], self.vecDisp[self.nodeDof * i + 2]])
             
         return displacement
+    
+    def calculateMaxStress(self):
+        """全要素の最大von Mises応力を計算
+        
+        Returns:
+            max_stress: 最大von Mises応力 [Pa]
+            max_element_id: 最大応力が発生した要素ID
+            all_stresses: 全要素のvon Mises応力リスト
+        """
+        if not hasattr(self, 'vecDisp'):
+            raise ValueError("解析が実行されていません。先にanalysis()を実行してください。")
+        
+        max_stress = 0.0
+        max_element_id = 0
+        all_stresses = []
+        
+        for element in self.elements:
+            # 要素の節点変位ベクトルを取得
+            element_displacement = np.zeros(12)  # 4節点 × 3自由度
+            
+            for i, node in enumerate(element.nodes):
+                node_id = node.no - 1  # ノード番号は1から始まるため
+                for j in range(3):  # x, y, z方向
+                    element_displacement[i*3 + j] = self.vecDisp[node_id*3 + j]
+            
+            # 要素の応力を計算
+            stress_vector, von_mises_stress = element.calculateStress(element_displacement)
+            all_stresses.append(von_mises_stress)
+            
+            # 最大応力を更新
+            if von_mises_stress > max_stress:
+                max_stress = von_mises_stress
+                max_element_id = element.no
+        
+        return max_stress, max_element_id, all_stresses
         
 

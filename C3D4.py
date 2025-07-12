@@ -138,4 +138,37 @@ class C3D4:
         vecEqNodeForce = vecBodyForce
         
         return vecEqNodeForce
+    
+    def calculateStress(self, displacement_vector):
+        """要素の応力を計算
+        
+        Args:
+            displacement_vector: 要素の節点変位ベクトル (12x1)
+        
+        Returns:
+            stress_vector: 応力ベクトル [σxx, σyy, σzz, τxy, τyz, τzx]
+            von_mises_stress: von Mises応力
+        """
+        # D行列（材料構成行列）を作成
+        D = self.makeDmatrix()
+        
+        # B行列（歪-変位関係行列）を作成
+        B = self.makeBmatrix()
+        
+        # 歪を計算 ε = B × u
+        strain_vector = B @ displacement_vector
+        
+        # 応力を計算 σ = D × ε  
+        stress_vector = D @ strain_vector
+        
+        # von Mises応力を計算
+        # σ_vm = sqrt(((σxx-σyy)²+(σyy-σzz)²+(σzz-σxx)²)/2 + 3(τxy²+τyz²+τzx²))
+        sxx, syy, szz, txy, tyz, tzx = stress_vector
+        
+        von_mises_stress = np.sqrt(
+            ((sxx - syy)**2 + (syy - szz)**2 + (szz - sxx)**2) / 2.0 +
+            3.0 * (txy**2 + tyz**2 + tzx**2)
+        )
+        
+        return stress_vector, von_mises_stress
 

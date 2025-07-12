@@ -3,4 +3,7 @@ numpy
 numpy-stl
 tk
 matplotlib
+scipy
+reportlab
+Pillow
 
