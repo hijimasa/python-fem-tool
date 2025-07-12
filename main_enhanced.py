@@ -94,6 +94,7 @@ class EnhancedFEMTool:
         self.create_material_tab()
         self.create_boundary_tab()
         self.create_analysis_tab()
+        self.create_parametric_tab()
         self.create_export_tab()
         
         # 最初のタブを選択状態にする
@@ -200,6 +201,12 @@ class EnhancedFEMTool:
         self.entry_density = tk.Entry(mat_frame, width=25)
         self.entry_density.pack(pady=2)
         self.entry_density.insert(0, "7850.0")
+        
+        # 降伏強度
+        tk.Label(mat_frame, text="降伏強度 [MPa]:").pack(anchor=tk.W)
+        self.entry_yield_strength = tk.Entry(mat_frame, width=25)
+        self.entry_yield_strength.pack(pady=2)
+        self.entry_yield_strength.insert(0, "250")
         
         # 重力考慮
         self.var_gravity = tk.BooleanVar()
@@ -345,6 +352,138 @@ class EnhancedFEMTool:
         scrollbar = tk.Scrollbar(analysis_frame, command=self.result_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.result_text.config(yscrollcommand=scrollbar.set)
+    
+    def create_parametric_tab(self):
+        """パラメトリック解析タブ"""
+        param_frame = ttk.Frame(self.notebook)
+        self.notebook.add(param_frame, text="Parametric")
+        
+        # スクロール可能なフレームを作成
+        canvas = tk.Canvas(param_frame)
+        scrollbar = tk.Scrollbar(param_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # --- パラメトリック設定エリア ---
+        param_settings_frame = tk.LabelFrame(scrollable_frame, text="パラメトリック解析設定", font=("Arial", 11, "bold"))
+        param_settings_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        tk.Label(param_settings_frame, text="形状スケール変更による強度解析", font=("Arial", 10)).pack(pady=5)
+        
+        # X軸スケール設定
+        x_frame = tk.Frame(param_settings_frame)
+        x_frame.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(x_frame, text="X軸スケール:", width=12).pack(side=tk.LEFT)
+        tk.Label(x_frame, text="開始:", width=6).pack(side=tk.LEFT)
+        self.param_x_start = tk.Entry(x_frame, width=8)
+        self.param_x_start.pack(side=tk.LEFT, padx=2)
+        self.param_x_start.insert(0, "50")
+        tk.Label(x_frame, text="終了:", width=6).pack(side=tk.LEFT)
+        self.param_x_end = tk.Entry(x_frame, width=8)
+        self.param_x_end.pack(side=tk.LEFT, padx=2)
+        self.param_x_end.insert(0, "200")
+        tk.Label(x_frame, text="刻み:", width=6).pack(side=tk.LEFT)
+        self.param_x_step = tk.Entry(x_frame, width=8)
+        self.param_x_step.pack(side=tk.LEFT, padx=2)
+        self.param_x_step.insert(0, "25")
+        tk.Label(x_frame, text="%").pack(side=tk.LEFT)
+        
+        # Y軸スケール設定
+        y_frame = tk.Frame(param_settings_frame)
+        y_frame.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(y_frame, text="Y軸スケール:", width=12).pack(side=tk.LEFT)
+        tk.Label(y_frame, text="開始:", width=6).pack(side=tk.LEFT)
+        self.param_y_start = tk.Entry(y_frame, width=8)
+        self.param_y_start.pack(side=tk.LEFT, padx=2)
+        self.param_y_start.insert(0, "50")
+        tk.Label(y_frame, text="終了:", width=6).pack(side=tk.LEFT)
+        self.param_y_end = tk.Entry(y_frame, width=8)
+        self.param_y_end.pack(side=tk.LEFT, padx=2)
+        self.param_y_end.insert(0, "200")
+        tk.Label(y_frame, text="刻み:", width=6).pack(side=tk.LEFT)
+        self.param_y_step = tk.Entry(y_frame, width=8)
+        self.param_y_step.pack(side=tk.LEFT, padx=2)
+        self.param_y_step.insert(0, "25")
+        tk.Label(y_frame, text="%").pack(side=tk.LEFT)
+        
+        # Z軸スケール設定
+        z_frame = tk.Frame(param_settings_frame)
+        z_frame.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(z_frame, text="Z軸スケール:", width=12).pack(side=tk.LEFT)
+        tk.Label(z_frame, text="開始:", width=6).pack(side=tk.LEFT)
+        self.param_z_start = tk.Entry(z_frame, width=8)
+        self.param_z_start.pack(side=tk.LEFT, padx=2)
+        self.param_z_start.insert(0, "50")
+        tk.Label(z_frame, text="終了:", width=6).pack(side=tk.LEFT)
+        self.param_z_end = tk.Entry(z_frame, width=8)
+        self.param_z_end.pack(side=tk.LEFT, padx=2)
+        self.param_z_end.insert(0, "200")
+        tk.Label(z_frame, text="刻み:", width=6).pack(side=tk.LEFT)
+        self.param_z_step = tk.Entry(z_frame, width=8)
+        self.param_z_step.pack(side=tk.LEFT, padx=2)
+        self.param_z_step.insert(0, "25")
+        tk.Label(z_frame, text="%").pack(side=tk.LEFT)
+        
+        # 実行ボタン
+        tk.Button(param_settings_frame, text="パラメトリック解析実行", 
+                 command=self.run_parametric_analysis, bg="#FF9800", fg="white", 
+                 font=("Arial", 11, "bold")).pack(pady=10)
+        
+        # --- 結果表示エリア ---
+        results_frame = tk.LabelFrame(scrollable_frame, text="解析結果", font=("Arial", 11, "bold"))
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # 結果テーブル用フレーム
+        table_frame = tk.Frame(results_frame)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # 結果テーブル（Treeview使用）
+        columns = ("Case", "X_Scale", "Y_Scale", "Z_Scale", "Max_Stress", "Safety_Factor", "Volume_Ratio")
+        self.param_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=10)
+        
+        # カラムヘッダー設定
+        self.param_tree.heading("Case", text="ケース")
+        self.param_tree.heading("X_Scale", text="X倍率")
+        self.param_tree.heading("Y_Scale", text="Y倍率") 
+        self.param_tree.heading("Z_Scale", text="Z倍率")
+        self.param_tree.heading("Max_Stress", text="最大応力[MPa]")
+        self.param_tree.heading("Safety_Factor", text="安全率")
+        self.param_tree.heading("Volume_Ratio", text="体積比")
+        
+        # カラム幅設定
+        self.param_tree.column("Case", width=60)
+        self.param_tree.column("X_Scale", width=60)
+        self.param_tree.column("Y_Scale", width=60)
+        self.param_tree.column("Z_Scale", width=60)
+        self.param_tree.column("Max_Stress", width=100)
+        self.param_tree.column("Safety_Factor", width=80)
+        self.param_tree.column("Volume_Ratio", width=80)
+        
+        # スクロールバー
+        tree_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.param_tree.yview)
+        self.param_tree.configure(yscrollcommand=tree_scrollbar.set)
+        
+        self.param_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 結果選択とプロット表示ボタン
+        button_frame = tk.Frame(results_frame)
+        button_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        tk.Button(button_frame, text="選択ケースを表示", 
+                 command=self.display_selected_case, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="結果をCSV出力", 
+                 command=self.export_parametric_results, bg="#2196F3", fg="white").pack(side=tk.LEFT, padx=5)
     
     def create_export_tab(self):
         """エクスポートタブ"""
@@ -538,8 +677,11 @@ class EnhancedFEMTool:
                 self.entry_density.delete(0, tk.END)
                 self.entry_density.insert(0, str(properties['density']))
                 
-                # 降伏応力を保存（安全率計算用）
+                # 降伏強度を表示・保存（安全率計算用）
                 self.current_yield_strength = properties.get('yield_strength', 250e6)
+                self.entry_yield_strength.delete(0, tk.END)
+                self.entry_yield_strength.insert(0, str(int(self.current_yield_strength/1e6)))
+                
                 print(f"材料選択: {properties['name']}, 降伏応力: {self.current_yield_strength/1e6:.0f} MPa")
     
     def read_stl_button_pressed(self):
@@ -1560,6 +1702,304 @@ class EnhancedFEMTool:
             except Exception as e:
                 messagebox.showerror("エラー", f"設定保存に失敗しました: {str(e)}")
     
+    def run_parametric_analysis(self):
+        """パラメトリック解析実行"""
+        if self.nodes is None or self.elems is None:
+            messagebox.showerror("エラー", "メッシュが生成されていません。")
+            return
+        
+        if not self.project_data.applied_forces and not (self.load_manager and 
+           (self.load_manager.edge_loads or self.load_manager.surface_loads)):
+            messagebox.showerror("エラー", "荷重が設定されていません。")
+            return
+        
+        # 元の形状の体積を保存（100%スケール時の体積）
+        self.original_volume = self.calculate_mesh_volume()
+        
+        try:
+            # パラメータ取得
+            x_start = float(self.param_x_start.get())
+            x_end = float(self.param_x_end.get())
+            x_step = float(self.param_x_step.get())
+            y_start = float(self.param_y_start.get())
+            y_end = float(self.param_y_end.get())
+            y_step = float(self.param_y_step.get())
+            z_start = float(self.param_z_start.get())
+            z_end = float(self.param_z_end.get())
+            z_step = float(self.param_z_step.get())
+        except ValueError:
+            messagebox.showerror("エラー", "スケール設定に無効な値があります。")
+            return
+        
+        # 元の座標を保存
+        original_nodes = self.nodes.copy()
+        
+        # 結果テーブルをクリア
+        for item in self.param_tree.get_children():
+            self.param_tree.delete(item)
+        
+        # スケール範囲を生成
+        x_scales = [x_start + i * x_step for i in range(int((x_end - x_start) / x_step) + 1) if x_start + i * x_step <= x_end]
+        y_scales = [y_start + i * y_step for i in range(int((y_end - y_start) / y_step) + 1) if y_start + i * y_step <= y_end]
+        z_scales = [z_start + i * z_step for i in range(int((z_end - z_start) / z_step) + 1) if z_start + i * z_step <= z_end]
+        
+        total_cases = len(x_scales) * len(y_scales) * len(z_scales)
+        
+        if total_cases > 100:
+            if not messagebox.askyesno("確認", f"解析ケース数が{total_cases}件になります。実行しますか？"):
+                return
+        
+        # プログレスバー表示
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("パラメトリック解析中...")
+        progress_window.geometry("400x100")
+        progress_window.transient(self.root)
+        progress_window.grab_set()
+        
+        progress_label = tk.Label(progress_window, text="解析を実行中...")
+        progress_label.pack(pady=10)
+        
+        progress_bar = ttk.Progressbar(progress_window, length=300, mode='determinate')
+        progress_bar.pack(pady=10)
+        progress_bar['maximum'] = total_cases
+        
+        # パラメトリック解析実行
+        results = []
+        case_num = 0
+        
+        for x_scale in x_scales:
+            for y_scale in y_scales:
+                for z_scale in z_scales:
+                    case_num += 1
+                    
+                    # プログレス更新
+                    progress_label.config(text=f"ケース {case_num}/{total_cases} (X:{x_scale}%, Y:{y_scale}%, Z:{z_scale}%)")
+                    progress_bar['value'] = case_num
+                    progress_window.update()
+                    
+                    try:
+                        # スケール適用
+                        self.nodes = original_nodes.copy()
+                        self.apply_scale(x_scale/100, y_scale/100, z_scale/100)
+                        
+                        # 解析実行
+                        max_stress, safety_factor, volume_ratio = self.analyze_single_case()
+                        
+                        # 結果保存
+                        results.append({
+                            'case': case_num,
+                            'x_scale': x_scale,
+                            'y_scale': y_scale,
+                            'z_scale': z_scale,
+                            'max_stress': max_stress,
+                            'safety_factor': safety_factor,
+                            'volume_ratio': volume_ratio
+                        })
+                        
+                        # テーブルに追加
+                        self.param_tree.insert("", "end", values=(
+                            case_num,
+                            f"{x_scale:.0f}%",
+                            f"{y_scale:.0f}%", 
+                            f"{z_scale:.0f}%",
+                            f"{max_stress/1e6:.2f}" if max_stress else "N/A",
+                            f"{safety_factor:.2f}" if safety_factor else "N/A",
+                            f"{volume_ratio:.3f}"
+                        ))
+                        
+                    except Exception as e:
+                        print(f"ケース {case_num} でエラー: {e}")
+                        continue
+        
+        # 元の形状に戻す
+        self.nodes = original_nodes
+        self.draw_mesh()
+        
+        # プログレスウィンドウを閉じる
+        progress_window.destroy()
+        
+        # 結果保存
+        self.parametric_results = results
+        
+        messagebox.showinfo("完了", f"パラメトリック解析が完了しました。\n{len(results)}ケースの解析を実行しました。")
+    
+    def apply_scale(self, x_scale, y_scale, z_scale):
+        """ノード座標にスケールを適用"""
+        if self.nodes is None:
+            return
+        
+        # numpy配列であることを確認
+        if not isinstance(self.nodes, np.ndarray):
+            self.nodes = np.array(self.nodes)
+        
+        # 重心を計算
+        centroid = np.mean(self.nodes, axis=0)
+        
+        # 重心を原点とした座標に変換
+        centered_nodes = self.nodes.copy() - centroid
+        
+        # スケール適用
+        centered_nodes[:, 0] *= float(x_scale)  # X軸
+        centered_nodes[:, 1] *= float(y_scale)  # Y軸
+        centered_nodes[:, 2] *= float(z_scale)  # Z軸
+        
+        # 重心を元に戻す
+        self.nodes = centered_nodes + centroid
+    
+    def analyze_single_case(self):
+        """単一ケースの解析実行"""
+        try:
+            # 解析実行（既存のメソッドを利用）
+            young = float(self.entry_young.get())
+            poisson = float(self.entry_poisson.get())
+            density = float(self.entry_density.get())
+            gravity = self.var_gravity.get()
+            
+            # ノードオブジェクト作成
+            nodes = []
+            for i, coord in enumerate(self.nodes):
+                nodes.append(Node(i + 1, coord[0], coord[1], coord[2]))
+            
+            # 要素オブジェクト作成
+            elements = []
+            gravity_vec = np.array([0.0, 0.0, -9.81]) if gravity else None
+            
+            for i, elem in enumerate(self.elems):
+                elem_nodes = [nodes[j] for j in elem]
+                elements.append(C3D4(i + 1, elem_nodes, young, poisson, density, gravity_vec))
+            
+            # 境界条件作成
+            boundary = Boundary(len(nodes))
+            
+            # 固定端設定
+            for node_id in self.project_data.fixed_nodes:
+                boundary.addSPC(node_id, 0.0, 0.0, 0.0)
+            
+            # 荷重設定
+            for force in self.project_data.applied_forces:
+                boundary.addForce(force[0], force[1], force[2], force[3])
+            
+            # LoadManagerからの荷重も適用
+            if self.load_manager:
+                equivalent_loads = self.load_manager.get_all_equivalent_point_loads()
+                for load in equivalent_loads:
+                    node_id = load[0] + 1  # ノード番号は0ベースから1ベースに変換
+                    fx, fy, fz = load[1], load[2], load[3]
+                    boundary.addForce(node_id, fx, fy, fz)
+            
+            # FEM解析実行
+            fem = FEM(nodes, elements, boundary)
+            _, _ = fem.analysis()
+            
+            # 応力計算
+            max_stress, _, _ = fem.calculateMaxStress()
+            
+            # 安全率計算
+            safety_factor = self.project_data.calculate_safety_factor(max_stress, self.current_yield_strength)
+            
+            # 体積比計算（元の体積との比）
+            volume_ratio = self.calculate_volume_ratio()
+            
+            return max_stress, safety_factor, volume_ratio
+            
+        except Exception as e:
+            import traceback
+            print(f"解析エラー: {e}")
+            print(f"詳細: {traceback.format_exc()}")
+            return None, None, 1.0
+    
+    def calculate_volume_ratio(self):
+        """現在の形状の体積比を計算"""
+        if not hasattr(self, 'original_volume') or self.original_volume == 0:
+            return 1.0
+        
+        current_volume = self.calculate_mesh_volume()
+        return current_volume / self.original_volume
+    
+    def calculate_mesh_volume(self):
+        """メッシュの体積を計算"""
+        if self.nodes is None or self.elems is None:
+            return 0.0
+        
+        # numpy配列であることを確認
+        if not isinstance(self.nodes, np.ndarray):
+            nodes_array = np.array(self.nodes)
+        else:
+            nodes_array = self.nodes
+        
+        total_volume = 0.0
+        for elem in self.elems:
+            try:
+                # 四面体の体積計算
+                tetra = nodes_array[elem]
+                v1 = tetra[1] - tetra[0]
+                v2 = tetra[2] - tetra[0] 
+                v3 = tetra[3] - tetra[0]
+                volume = abs(np.dot(v1, np.cross(v2, v3))) / 6.0
+                total_volume += volume
+            except Exception as e:
+                print(f"体積計算エラー (要素 {elem}): {e}")
+                continue
+        
+        return total_volume
+    
+    def display_selected_case(self):
+        """選択されたケースを表示"""
+        selection = self.param_tree.selection()
+        if not selection:
+            messagebox.showwarning("警告", "ケースを選択してください。")
+            return
+        
+        # 選択されたケースの情報を取得
+        item = self.param_tree.item(selection[0])
+        values = item['values']
+        case_num = int(values[0])
+        
+        if hasattr(self, 'parametric_results'):
+            result = next((r for r in self.parametric_results if r['case'] == case_num), None)
+            if result:
+                # スケールを適用して表示
+                self.apply_scale(result['x_scale']/100, result['y_scale']/100, result['z_scale']/100)
+                self.draw_mesh()
+                messagebox.showinfo("表示", f"ケース {case_num} を表示しました。\n"
+                                  f"スケール: X={result['x_scale']}%, Y={result['y_scale']}%, Z={result['z_scale']}%")
+    
+    def export_parametric_results(self):
+        """パラメトリック解析結果をCSV出力"""
+        if not hasattr(self, 'parametric_results'):
+            messagebox.showwarning("警告", "パラメトリック解析結果がありません。")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            title="解析結果をCSV保存",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                import csv
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['Case', 'X_Scale[%]', 'Y_Scale[%]', 'Z_Scale[%]', 
+                                'Max_Stress[MPa]', 'Safety_Factor', 'Volume_Ratio']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    writer.writeheader()
+                    for result in self.parametric_results:
+                        writer.writerow({
+                            'Case': result['case'],
+                            'X_Scale[%]': result['x_scale'],
+                            'Y_Scale[%]': result['y_scale'],
+                            'Z_Scale[%]': result['z_scale'],
+                            'Max_Stress[MPa]': result['max_stress']/1e6 if result['max_stress'] else 'N/A',
+                            'Safety_Factor': result['safety_factor'] if result['safety_factor'] else 'N/A',
+                            'Volume_Ratio': result['volume_ratio']
+                        })
+                
+                messagebox.showinfo("完了", f"CSV出力が完了しました: {filename}")
+            except Exception as e:
+                messagebox.showerror("エラー", f"CSV出力に失敗しました: {str(e)}")
+
     def run(self):
         """アプリケーション実行"""
         self.root.mainloop()
