@@ -19,8 +19,9 @@ import os
 class DocumentExporter:
     """解析結果をドキュメントとして出力するクラス"""
     
-    def __init__(self, project_data):
+    def __init__(self, project_data, load_manager=None):
         self.project_data = project_data
+        self.load_manager = load_manager
         self.styles = getSampleStyleSheet()
         
         # 日本語フォントの設定（システムにインストールされている場合）
@@ -145,9 +146,38 @@ class DocumentExporter:
         # デフォルト値（一般的な鋼材）
         return 250e6  # Pa
     
-    def export_to_html(self, output_path):
+    def capture_current_plot(self, canvas):
+        """現在のプロット領域から画像データを取得"""
+        try:
+            # キャンバスの描画を更新
+            canvas.draw()
+            
+            # キャンバスのサイズを取得
+            width, height = canvas.figure.get_size_inches() * canvas.figure.dpi
+            
+            # キャンバスから画像データを取得
+            buffer = io.BytesIO()
+            canvas.figure.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            buffer.seek(0)
+            image_data = buffer.getvalue()
+            buffer.close()
+            
+            return image_data
+        except Exception as e:
+            print(f"プロット画像の取得に失敗しました: {e}")
+            return None
+    
+    def export_to_html(self, output_path, canvas=None):
         """HTML形式でレポートを出力"""
         yield_strength = self.get_yield_strength()
+        
+        # 現在のプロット画像を取得
+        plot_image_base64 = ""
+        if canvas:
+            plot_image_data = self.capture_current_plot(canvas)
+            if plot_image_data:
+                plot_image_base64 = base64.b64encode(plot_image_data).decode('utf-8')
+        
         html_content = f"""
         <!DOCTYPE html>
         <html lang="ja">
@@ -189,13 +219,35 @@ class DocumentExporter:
                         <tr><td>降伏応力</td><td>{yield_strength:.2e}</td><td>Pa</td></tr>
                         <tr><td>重力考慮</td><td>{'有' if self.project_data.gravity_enabled else '無'}</td><td>-</td></tr>
                         <tr><td>固定端数</td><td>{len(self.project_data.fixed_nodes)}</td><td>個</td></tr>
-                        <tr><td>荷重点数</td><td>{len(self.project_data.applied_forces)}</td><td>個</td></tr>
+                        <tr><td>点荷重数</td><td>{len(self.project_data.applied_forces)}</td><td>個</td></tr>"""
+        
+        # 辺荷重と面荷重の数もカウント
+        edge_load_count = 0
+        surface_load_count = 0
+        
+        if self.load_manager and hasattr(self.load_manager, 'edge_loads') and self.load_manager.edge_loads:
+            edge_load_count = len(self.load_manager.edge_loads)
+        
+        if self.load_manager and hasattr(self.load_manager, 'surface_loads') and self.load_manager.surface_loads:
+            surface_load_count = len(self.load_manager.surface_loads)
+        
+        if edge_load_count > 0:
+            html_content += f"""
+                        <tr><td>辺荷重数</td><td>{edge_load_count}</td><td>個</td></tr>"""
+        
+        if surface_load_count > 0:
+            html_content += f"""
+                        <tr><td>面荷重数</td><td>{surface_load_count}</td><td>個</td></tr>"""
+        
+        html_content += """
                     </table>
                 </div>
             </div>
             
             <div class="section">
                 <h3>荷重条件</h3>
+                
+                <h4>点荷重</h4>
                 <table>
                     <tr><th>ノード番号</th><th>X方向力[N]</th><th>Y方向力[N]</th><th>Z方向力[N]</th></tr>
         """
@@ -205,6 +257,51 @@ class DocumentExporter:
         
         html_content += """
                 </table>
+        """
+        
+        # 辺荷重の情報を追加
+        if self.load_manager and hasattr(self.load_manager, 'edge_loads') and self.load_manager.edge_loads:
+            html_content += """
+                <h4>辺荷重</h4>
+                <table>
+                    <tr><th>辺番号</th><th>対象ノード</th><th>荷重密度[N/m]</th><th>X方向成分</th><th>Y方向成分</th><th>Z方向成分</th></tr>
+            """
+            for i, edge_load in enumerate(self.load_manager.edge_loads):
+                if 'nodes' in edge_load and edge_load['nodes']:
+                    node_list = ", ".join([str(node_id) for node_id in edge_load['nodes']])
+                    # force_per_lengthとdirectionを表示
+                    force_per_length = edge_load.get('force_per_length', 0.0)
+                    direction = edge_load.get('direction', [0.0, 0.0, 0.0])
+                    dx = direction[0] if len(direction) > 0 else 0.0
+                    dy = direction[1] if len(direction) > 1 else 0.0
+                    dz = direction[2] if len(direction) > 2 else 0.0
+                    html_content += f"""<tr><td>{i+1}</td><td>{node_list}</td><td>{force_per_length:.2f}</td><td>{dx:.3f}</td><td>{dy:.3f}</td><td>{dz:.3f}</td></tr>"""
+            html_content += """
+                </table>
+            """
+        
+        # 面荷重の情報を追加
+        if self.load_manager and hasattr(self.load_manager, 'surface_loads') and self.load_manager.surface_loads:
+            html_content += """
+                <h4>面荷重</h4>
+                <table>
+                    <tr><th>面番号</th><th>対象ノード</th><th>荷重密度[N/m²]</th><th>X方向成分</th><th>Y方向成分</th><th>Z方向成分</th></tr>
+            """
+            for i, surface_load in enumerate(self.load_manager.surface_loads):
+                if 'nodes' in surface_load and surface_load['nodes']:
+                    node_list = ", ".join([str(node_id) for node_id in surface_load['nodes']])
+                    # force_per_areaとdirectionを表示
+                    force_per_area = surface_load.get('force_per_area', 0.0)
+                    direction = surface_load.get('direction', [0.0, 0.0, 0.0])
+                    dx = direction[0] if len(direction) > 0 else 0.0
+                    dy = direction[1] if len(direction) > 1 else 0.0
+                    dz = direction[2] if len(direction) > 2 else 0.0
+                    html_content += f"""<tr><td>{i+1}</td><td>{node_list}</td><td>{force_per_area:.2f}</td><td>{dx:.3f}</td><td>{dy:.3f}</td><td>{dz:.3f}</td></tr>"""
+            html_content += """
+                </table>
+            """
+        
+        html_content += """
             </div>
         """
         
@@ -240,8 +337,17 @@ class DocumentExporter:
             <div class="section">
                 <h3>図表</h3>
                 <p>解析で使用したメッシュと境界条件を以下に示します。</p>
-                <div class="image-container">
-                    <p><em>注：この位置に3D可視化画像が表示されます</em></p>
+                <div class="image-container">"""
+        
+        if plot_image_base64:
+            html_content += f"""
+                    <img src="data:image/png;base64,{plot_image_base64}" alt="現在の3Dプロット" style="max-width: 100%; height: auto;">
+                    <p><em>現在のプロット表示</em></p>"""
+        else:
+            html_content += """
+                    <p><em>注：プロット画像の取得に失敗しました</em></p>"""
+        
+        html_content += """
                 </div>
             </div>
             
@@ -268,7 +374,7 @@ class DocumentExporter:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
     
-    def export_to_pdf(self, output_path):
+    def export_to_pdf(self, output_path, canvas=None):
         """PDF形式でレポートを出力"""
         doc = SimpleDocTemplate(output_path, pagesize=A4)
         story = []
@@ -299,8 +405,19 @@ class DocumentExporter:
             ['降伏応力', f"{yield_strength:.2e}", 'Pa'],
             ['重力考慮', '有' if self.project_data.gravity_enabled else '無', '-'],
             ['固定端数', f"{len(self.project_data.fixed_nodes)}", '個'],
-            ['荷重点数', f"{len(self.project_data.applied_forces)}", '個']
+            ['点荷重数', f"{len(self.project_data.applied_forces)}", '個']
         ]
+        
+        # 辺荷重と面荷重の数もカウント
+        if self.load_manager and hasattr(self.load_manager, 'edge_loads') and self.load_manager.edge_loads:
+            edge_load_count = len(self.load_manager.edge_loads)
+            if edge_load_count > 0:
+                condition_data.append(['辺荷重数', f"{edge_load_count}", '個'])
+        
+        if self.load_manager and hasattr(self.load_manager, 'surface_loads') and self.load_manager.surface_loads:
+            surface_load_count = len(self.load_manager.surface_loads)
+            if surface_load_count > 0:
+                condition_data.append(['面荷重数', f"{surface_load_count}", '個'])
         
         condition_table = Table(condition_data)
         condition_table.setStyle(TableStyle([
@@ -343,6 +460,25 @@ class DocumentExporter:
             ]))
             
             story.append(result_table)
+            story.append(Spacer(1, 20))
+        
+        # 現在のプロット画像をPDFに追加
+        if canvas:
+            story.append(Paragraph("プロット表示", self.styles['Heading2']))
+            plot_image_data = self.capture_current_plot(canvas)
+            if plot_image_data:
+                # 一時ファイルに画像を保存
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+                    temp_file.write(plot_image_data)
+                    temp_file_path = temp_file.name
+                
+                try:
+                    # PDFに画像を追加
+                    img = Image(temp_file_path, width=6*inch, height=4*inch)
+                    story.append(img)
+                finally:
+                    # 一時ファイルを削除
+                    os.unlink(temp_file_path)
         
         doc.build(story)
     

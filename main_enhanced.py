@@ -298,6 +298,26 @@ class EnhancedFEMTool:
         
         # 初期表示
         self.update_conditions_display()
+        
+        # --- 表示制御エリア ---
+        display_frame = tk.LabelFrame(scrollable_frame, text="表示制御", font=("Arial", 11, "bold"))
+        display_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # ボタンを横並びに配置
+        button_frame = tk.Frame(display_frame)
+        button_frame.pack(pady=5)
+        
+        tk.Button(button_frame, text="表示リセット", command=self.auto_scale_axes, 
+                 bg="#4CAF50", fg="white", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
+        
+        tk.Button(button_frame, text="視点リセット", command=self.reset_view, 
+                 bg="#2196F3", fg="white", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
+        
+        # 操作説明
+        tk.Label(display_frame, text="マウスホイール: 拡大/縮小", font=("Arial", 8), 
+                fg="gray").pack(pady=1)
+        tk.Label(display_frame, text="マウスドラッグ: 視点回転", font=("Arial", 8), 
+                fg="gray").pack(pady=1)
     
     def create_analysis_tab(self):
         """解析実行タブ"""
@@ -358,6 +378,7 @@ class EnhancedFEMTool:
     def setup_events(self):
         """イベントハンドラを設定"""
         self.fig.canvas.mpl_connect("pick_event", self.on_node_click)
+        self.fig.canvas.mpl_connect("scroll_event", self.on_scroll)
     
     def browse_stl_file(self):
         """STLファイル選択ダイアログ"""
@@ -593,6 +614,9 @@ class EnhancedFEMTool:
                                     color="blue", picker=True, s=20)
             self.node_scatter.append(scatter)
         
+        # 自動的にスケールを調整
+        self.auto_scale_axes()
+        
         self.canvas.draw()
     
     def clear_plot(self):
@@ -632,6 +656,110 @@ class EnhancedFEMTool:
                 break
         
         self.canvas.draw()
+    
+    def on_scroll(self, event):
+        """マウスホイールによる拡大縮小"""
+        if self.nodes is None:
+            return
+        
+        # 現在の軸の範囲を取得
+        ax_limits = [self.ax.get_xlim(), self.ax.get_ylim(), self.ax.get_zlim()]
+        
+        # スクロール方向に応じてスケール係数を決定
+        if event.button == 'up':
+            scale_factor = 0.9  # 拡大
+        elif event.button == 'down':
+            scale_factor = 1.1  # 縮小
+        else:
+            return
+        
+        # 各軸の中心を計算
+        centers = [(lim[0] + lim[1]) / 2 for lim in ax_limits]
+        
+        # 各軸の範囲をスケール
+        for i, (center, (low, high)) in enumerate(zip(centers, ax_limits)):
+            range_half = (high - low) / 2 * scale_factor
+            new_low = center - range_half
+            new_high = center + range_half
+            
+            if i == 0:
+                self.ax.set_xlim(new_low, new_high)
+            elif i == 1:
+                self.ax.set_ylim(new_low, new_high)
+            else:
+                self.ax.set_zlim(new_low, new_high)
+        
+        self.canvas.draw()
+    
+    def auto_scale_axes(self):
+        """XYZ軸のスケールを統一"""
+        if self.nodes is None:
+            return
+        
+        # ノードの座標範囲を取得
+        all_coords = [self.nodes]
+        
+        # 変形後の座標が存在する場合は含める
+        if hasattr(self, 'project_data') and self.project_data.displacement is not None:
+            try:
+                scale = float(self.entry_scale.get()) if hasattr(self, 'entry_scale') else 10000.0
+                deformed_nodes = np.zeros_like(self.nodes)
+                for i in range(len(self.nodes)):
+                    for j in range(3):
+                        deformed_nodes[i][j] = self.nodes[i][j] + scale * self.project_data.displacement[i][j]
+                all_coords.append(deformed_nodes)
+            except:
+                pass
+        
+        # 全座標の範囲を計算
+        all_points = np.vstack(all_coords)
+        x_coords = all_points[:, 0]
+        y_coords = all_points[:, 1]
+        z_coords = all_points[:, 2]
+        
+        # 各軸の範囲を計算
+        x_range = [x_coords.min(), x_coords.max()]
+        y_range = [y_coords.min(), y_coords.max()]
+        z_range = [z_coords.min(), z_coords.max()]
+        
+        # 各軸の幅を計算
+        x_width = x_range[1] - x_range[0]
+        y_width = y_range[1] - y_range[0]
+        z_width = z_range[1] - z_range[0]
+        
+        # 最大幅を取得
+        max_width = max(x_width, y_width, z_width)
+        
+        # 余白を追加（10%のマージン）
+        margin = max_width * 0.1
+        max_width += margin * 2
+        
+        # 各軸の中心を計算
+        x_center = (x_range[0] + x_range[1]) / 2
+        y_center = (y_range[0] + y_range[1]) / 2
+        z_center = (z_range[0] + z_range[1]) / 2
+        
+        # 統一されたスケールで各軸の範囲を設定
+        half_width = max_width / 2
+        self.ax.set_xlim(x_center - half_width, x_center + half_width)
+        self.ax.set_ylim(y_center - half_width, y_center + half_width)
+        self.ax.set_zlim(z_center - half_width, z_center + half_width)
+        
+        # アスペクト比を等しく設定（matplotlib 3D軸の制限により完全ではない）
+        self.ax.set_box_aspect([1,1,1])
+        
+        self.canvas.draw()
+    
+    def reset_view(self):
+        """視点をデフォルトに戻す"""
+        if self.nodes is None:
+            return
+        
+        # デフォルトの視点角度に設定
+        self.ax.view_init(elev=20, azim=45)
+        
+        # スケールも同時にリセット
+        self.auto_scale_axes()
     
     def handle_node_selection(self, node_id):
         """ノード選択処理（複数選択対応）"""
@@ -1239,6 +1367,9 @@ class EnhancedFEMTool:
             collection = Poly3DCollection(verts, edgecolor="blue", alpha=0.2, facecolor='lightblue')
             self.draw_result.append(self.ax.add_collection3d(collection))
         
+        # 変形後の形状を含めて自動スケール調整
+        self.auto_scale_axes()
+        
         self.canvas.draw()
     
     def new_project(self):
@@ -1346,11 +1477,16 @@ class EnhancedFEMTool:
             
             if filename:
                 try:
-                    exporter = DocumentExporter(self.project_data)
-                    exporter.export_to_html(filename)
+                    # load_managerが存在しない場合は安全にNoneを渡す
+                    load_manager = getattr(self, 'load_manager', None)
+                    exporter = DocumentExporter(self.project_data, load_manager)
+                    exporter.export_to_html(filename, self.canvas)
                     messagebox.showinfo("完了", f"HTMLレポートを保存しました: {filename}")
                 except Exception as e:
-                    messagebox.showerror("エラー", f"HTMLエクスポートに失敗しました: {str(e)}")
+                    import traceback
+                    error_details = traceback.format_exc()
+                    print(f"HTMLエクスポートエラー: {error_details}")
+                    messagebox.showerror("エラー", f"HTMLエクスポートに失敗しました: {str(e)}\n\n詳細:\n{error_details}")
         
         elif export_format == "pdf":
             filename = filedialog.asksaveasfilename(
@@ -1361,8 +1497,10 @@ class EnhancedFEMTool:
             
             if filename:
                 try:
-                    exporter = DocumentExporter(self.project_data)
-                    exporter.export_to_pdf(filename)
+                    # load_managerが存在しない場合は安全にNoneを渡す
+                    load_manager = getattr(self, 'load_manager', None)
+                    exporter = DocumentExporter(self.project_data, load_manager)
+                    exporter.export_to_pdf(filename, self.canvas)
                     messagebox.showinfo("完了", f"PDFレポートを保存しました: {filename}")
                 except Exception as e:
                     messagebox.showerror("エラー", f"PDFエクスポートに失敗しました: {str(e)}")
@@ -1372,7 +1510,9 @@ class EnhancedFEMTool:
             
             if directory:
                 try:
-                    exporter = DocumentExporter(self.project_data)
+                    # load_managerが存在しない場合は安全にNoneを渡す
+                    load_manager = getattr(self, 'load_manager', None)
+                    exporter = DocumentExporter(self.project_data, load_manager)
                     exporter.export_images(directory)
                     messagebox.showinfo("完了", f"画像を保存しました: {directory}")
                 except Exception as e:
