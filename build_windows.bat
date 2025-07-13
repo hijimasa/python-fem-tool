@@ -6,23 +6,22 @@ echo === Python FEM Tool - Windows Build Script ===
 echo.
 
 REM Check if PyInstaller is installed
-pyinstaller --version >nul 2>&1
+python -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
     echo PyInstaller not found. Installing...
-    pip install pyinstaller
+    python -m pip install pyinstaller
 )
 
 REM Clean existing build files
 echo Cleaning existing build files...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-if exist *.spec del *.spec
 
 echo Building Windows executable...
 echo.
 
 REM Build using spec file to avoid mypyc issues
-pyinstaller windows.spec
+python -m PyInstaller windows.spec
 
 REM Check build result
 if exist "dist\PythonFEMTool.exe" (
