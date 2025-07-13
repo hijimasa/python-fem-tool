@@ -73,10 +73,47 @@ Windows環境では以下の手順で実行：
 
 #### Windows上での直接ビルド
 1. Windows環境にPythonとPyInstallerをインストール
-2. 同じコマンドを実行：
+2. ビルドスクリプトを実行：
 ```cmd
-pyinstaller --onefile --windowed --name "PythonFEMTool" main.py
+REM 標準ビルドスクリプト
+build_windows_fixed.bat
+
+REM または、mypycエラーが発生する場合は修正スクリプトを使用
+python fix_mypyc_build.py
 ```
+
+#### Windows環境でのトラブルシューティング
+
+**mypycエラーが発生する場合**:
+```
+ModuleNotFoundError: No module named '91844386ccf7a24691a0__mypyc'
+```
+
+このエラーは、mypycで最適化されたパッケージがPyInstallerと互換性がない場合に発生します。
+
+**解決方法1**: 修正スクリプトを使用
+```cmd
+python fix_mypyc_build.py
+```
+
+**解決方法2**: 手動修正
+```cmd
+REM mypyc最適化されたパッケージを再インストール
+pip uninstall -y mypy black
+pip install --no-binary mypy mypy
+pip install --no-binary black black
+
+REM キャッシュをクリア
+rmdir /s /q build
+rmdir /s /q dist
+rmdir /s /q __pycache__
+
+REM specファイルでビルド
+pyinstaller windows.spec
+```
+
+**解決方法3**: UTF-8エンコーディング問題
+Windows環境でbatファイルが動作しない場合は、`build_windows_fixed.bat` を使用してください。
 
 #### クロスコンパイル（Linux→Windows）
 PyInstallerはクロスコンパイルをサポートしていないため、Windows用実行ファイルはWindows環境で作成する必要があります。
