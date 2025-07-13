@@ -37,6 +37,13 @@ pyinstaller --onefile ^
     --hidden-import tkinter.ttk ^
     --hidden-import tkinter.filedialog ^
     --hidden-import tkinter.messagebox ^
+    --hidden-import reportlab ^
+    --hidden-import reportlab.lib ^
+    --hidden-import reportlab.lib.pagesizes ^
+    --hidden-import reportlab.platypus ^
+    --hidden-import reportlab.graphics ^
+    --hidden-import PIL ^
+    --hidden-import PIL.Image ^
     --add-data "MaterialDatabase.py;." ^
     --add-data "GeometryGenerator.py;." ^
     --add-data "LoadManager.py;." ^
