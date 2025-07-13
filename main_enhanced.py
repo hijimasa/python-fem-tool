@@ -34,11 +34,18 @@ class EnhancedFEMTool:
         # 描画関連変数
         self.nodes = None
         self.elems = None
+        self.base_nodes = None      # 解析用の基本メッシュ（不変）
+        self.display_nodes = None   # 表示用メッシュ（変形可能）
         self.draw_stl_list = []
         self.draw_result = []
         self.node_scatter = []
         self.quiver_plots = []
         self.selected_nodes = []
+        
+        # メッシュ表示設定
+        self.mesh_display_level = 1.0  # 1.0 = 全表示, 0.5 = 50%表示, 等
+        self.show_mesh_edges_only = False  # True = エッジのみ表示
+        self.max_display_elements = 10000  # 最大表示要素数
         
         # 境界条件管理
         self.boundary_conditions = []  # 設定済み境界条件のリスト
@@ -95,10 +102,14 @@ class EnhancedFEMTool:
         self.create_boundary_tab()
         self.create_analysis_tab()
         self.create_parametric_tab()
+        self.create_vibration_tab()
         self.create_export_tab()
         
         # 最初のタブを選択状態にする
         self.notebook.select(0)
+        
+        # タブ切り替えイベントをバインド
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
     
     def create_file_tab(self):
         """ファイル操作タブ"""
@@ -160,6 +171,9 @@ class EnhancedFEMTool:
         self.update_geometry_params()  # 初期パラメータ表示
         
         tk.Button(geom_frame, text="形状生成", command=self.generate_geometry).pack(pady=10)
+        
+        # 表示設定コントロールを追加
+        self.create_display_settings_controls(geom_frame)
     
     def create_material_tab(self):
         """材料選択タブ"""
@@ -314,7 +328,7 @@ class EnhancedFEMTool:
         button_frame = tk.Frame(display_frame)
         button_frame.pack(pady=5)
         
-        tk.Button(button_frame, text="表示リセット", command=self.auto_scale_axes, 
+        tk.Button(button_frame, text="表示リセット", command=self.reset_display_scale, 
                  bg="#4CAF50", fg="white", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
         
         tk.Button(button_frame, text="視点リセット", command=self.reset_view, 
@@ -485,6 +499,92 @@ class EnhancedFEMTool:
         tk.Button(button_frame, text="結果をCSV出力", 
                  command=self.export_parametric_results, bg="#2196F3", fg="white").pack(side=tk.LEFT, padx=5)
     
+    def create_vibration_tab(self):
+        """振動解析タブ"""
+        vib_frame = ttk.Frame(self.notebook)
+        self.notebook.add(vib_frame, text="Vibration")
+        
+        # スクロール可能なフレームを作成
+        canvas = tk.Canvas(vib_frame)
+        scrollbar = tk.Scrollbar(vib_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # --- 振動解析設定エリア ---
+        vib_settings_frame = tk.LabelFrame(scrollable_frame, text="振動解析設定", font=("Arial", 11, "bold"))
+        vib_settings_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        tk.Label(vib_settings_frame, text="固有振動数・固有モード解析", font=("Arial", 10)).pack(pady=5)
+        
+        # 解析パラメータ設定
+        params_frame = tk.Frame(vib_settings_frame)
+        params_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # 解析するモード数
+        mode_frame = tk.Frame(params_frame)
+        mode_frame.pack(fill=tk.X, pady=2)
+        tk.Label(mode_frame, text="解析モード数:", width=15).pack(side=tk.LEFT)
+        self.vib_num_modes = tk.Entry(mode_frame, width=10)
+        self.vib_num_modes.pack(side=tk.LEFT, padx=5)
+        self.vib_num_modes.insert(0, "10")
+        tk.Label(mode_frame, text="個").pack(side=tk.LEFT)
+        
+        # 解析実行ボタン
+        tk.Button(vib_settings_frame, text="振動解析実行", 
+                 command=self.run_vibration_analysis, bg="#9C27B0", fg="white", 
+                 font=("Arial", 11, "bold")).pack(pady=10)
+        
+        # --- 解析結果表示エリア ---
+        results_frame = tk.LabelFrame(scrollable_frame, text="解析結果", font=("Arial", 11, "bold"))
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # 固有振動数表示テーブル
+        freq_frame = tk.Frame(results_frame)
+        freq_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        tk.Label(freq_frame, text="固有振動数一覧", font=("Arial", 10, "bold")).pack(pady=5)
+        
+        # 結果テーブル（Treeview使用）
+        freq_columns = ("Mode", "Frequency_Hz", "Frequency_rad", "Period")
+        self.vib_tree = ttk.Treeview(freq_frame, columns=freq_columns, show="headings", height=10)
+        
+        # カラムヘッダー設定
+        self.vib_tree.heading("Mode", text="モード")
+        self.vib_tree.heading("Frequency_Hz", text="振動数 [Hz]")
+        self.vib_tree.heading("Frequency_rad", text="角振動数 [rad/s]")
+        self.vib_tree.heading("Period", text="周期 [s]")
+        
+        # カラム幅設定
+        self.vib_tree.column("Mode", width=60)
+        self.vib_tree.column("Frequency_Hz", width=100)
+        self.vib_tree.column("Frequency_rad", width=120)
+        self.vib_tree.column("Period", width=100)
+        
+        # スクロールバー付きでテーブルを配置
+        vib_scrollbar = ttk.Scrollbar(freq_frame, orient="vertical", command=self.vib_tree.yview)
+        self.vib_tree.configure(yscrollcommand=vib_scrollbar.set)
+        self.vib_tree.pack(side="left", fill="both", expand=True)
+        vib_scrollbar.pack(side="right", fill="y")
+        
+        # 制御ボタン
+        button_frame = tk.Frame(results_frame)
+        button_frame.pack(pady=10)
+        
+        tk.Button(button_frame, text="選択モードを表示", 
+                 command=self.display_selected_mode, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="結果をCSV出力", 
+                 command=self.export_vibration_results, bg="#2196F3", fg="white").pack(side=tk.LEFT, padx=5)
+    
     def create_export_tab(self):
         """エクスポートタブ"""
         export_frame = ttk.Frame(self.notebook)
@@ -610,25 +710,28 @@ class EnhancedFEMTool:
                 length = float(self.geom_length.get())
                 width = float(self.geom_width.get())
                 height = float(self.geom_height.get())
-                self.nodes, self.elems = GeometryGenerator.create_rectangular_block(length, width, height)
+                nodes, elems = GeometryGenerator.create_rectangular_block(length, width, height)
                 
             elif geom_type == "cylinder":
                 radius = float(self.geom_radius.get())
                 height = float(self.geom_height.get())
-                self.nodes, self.elems = GeometryGenerator.create_cylinder(radius, height)
+                nodes, elems = GeometryGenerator.create_cylinder(radius, height)
                 
             elif geom_type == "hollow_cylinder":
                 outer_radius = float(self.geom_outer_radius.get())
                 inner_radius = float(self.geom_inner_radius.get())
                 height = float(self.geom_height.get())
-                self.nodes, self.elems = GeometryGenerator.create_hollow_cylinder(outer_radius, inner_radius, height)
+                nodes, elems = GeometryGenerator.create_hollow_cylinder(outer_radius, inner_radius, height)
                 
             elif geom_type == "l_shape":
                 width = float(self.geom_width.get())
                 height = float(self.geom_height.get())
                 thickness = float(self.geom_thickness.get())
                 length = float(self.geom_length.get())
-                self.nodes, self.elems = GeometryGenerator.create_l_shape(width, height, thickness, length)
+                nodes, elems = GeometryGenerator.create_l_shape(width, height, thickness, length)
+            
+            # メッシュデータを設定（解析用と表示用を分離）
+            self.set_mesh_data(nodes, elems)
             
             # 生成された形状を描画
             self.draw_mesh()
@@ -692,7 +795,8 @@ class EnhancedFEMTool:
             return
         
         try:
-            self.nodes, self.elems = self.read_stl(file_path)
+            nodes, elems = self.read_stl(file_path)
+            self.set_mesh_data(nodes, elems)
             self.draw_mesh()
             
             # LoadManagerを更新（荷重情報は保持）
@@ -731,16 +835,16 @@ class EnhancedFEMTool:
         return nodes, elems
     
     def draw_mesh(self):
-        """メッシュを描画"""
-        if self.nodes is None or self.elems is None:
+        """メッシュを描画（表示用ノードを使用）"""
+        if self.display_nodes is None or self.elems is None:
             return
         
         # 既存の描画をクリア
         self.clear_plot()
         
-        # メッシュを描画
+        # メッシュを描画（表示用ノードを使用）
         for elem in self.elems:
-            tetra = self.nodes[elem]
+            tetra = self.display_nodes[elem]
             verts = [
                 [tetra[0], tetra[1], tetra[2]],
                 [tetra[0], tetra[1], tetra[3]],
@@ -750,16 +854,100 @@ class EnhancedFEMTool:
             collection = Poly3DCollection(verts, edgecolor="k", alpha=0.1, facecolor='lightgray')
             self.draw_stl_list.append(self.ax.add_collection3d(collection))
         
-        # ノードを描画
-        for i in range(len(self.nodes)):
-            scatter = self.ax.scatter(self.nodes[i, 0], self.nodes[i, 1], self.nodes[i, 2], 
+        # ノードを描画（表示用ノードを使用）
+        for i in range(len(self.display_nodes)):
+            scatter = self.ax.scatter(self.display_nodes[i, 0], self.display_nodes[i, 1], self.display_nodes[i, 2], 
                                     color="blue", picker=True, s=20)
             self.node_scatter.append(scatter)
         
-        # 自動的にスケールを調整
-        self.auto_scale_axes()
+        # 軸スケールを統一
+        self.set_equal_axis_scale(self.display_nodes)
         
         self.canvas.draw()
+    
+    def create_display_settings_controls(self, parent_frame):
+        """表示設定コントロールを作成"""
+        settings_frame = tk.LabelFrame(parent_frame, text="表示設定", font=("Arial", 10, "bold"))
+        settings_frame.pack(fill=tk.X, pady=5)
+        
+        # メッシュ表示レベル
+        tk.Label(settings_frame, text="メッシュ表示率 [%]:").pack(anchor=tk.W)
+        self.mesh_level_scale = tk.Scale(settings_frame, from_=10, to=100, 
+                                       orient=tk.HORIZONTAL, length=200,
+                                       command=self.on_mesh_level_change)
+        self.mesh_level_scale.set(100)
+        self.mesh_level_scale.pack(anchor=tk.W)
+        
+        # エッジのみ表示オプション
+        self.var_edges_only = tk.BooleanVar()
+        edges_check = tk.Checkbutton(settings_frame, text="エッジのみ表示（軽量化）", 
+                                   variable=self.var_edges_only,
+                                   command=self.on_display_mode_change)
+        edges_check.pack(anchor=tk.W, pady=2)
+        
+        # 最大表示要素数
+        tk.Label(settings_frame, text="最大表示要素数:").pack(anchor=tk.W)
+        self.max_elements_entry = tk.Entry(settings_frame, width=10)
+        self.max_elements_entry.pack(anchor=tk.W)
+        self.max_elements_entry.insert(0, "10000")
+        self.max_elements_entry.bind('<KeyRelease>', self.on_max_elements_change)
+        
+        # リフレッシュボタン
+        tk.Button(settings_frame, text="表示更新", command=self.refresh_display).pack(pady=5)
+    
+    def on_mesh_level_change(self, value):
+        """メッシュ表示レベル変更時の処理"""
+        self.mesh_display_level = float(value) / 100.0
+        if hasattr(self, 'auto_refresh') and self.auto_refresh:
+            self.refresh_display()
+    
+    def on_display_mode_change(self):
+        """表示モード変更時の処理"""
+        self.show_mesh_edges_only = self.var_edges_only.get()
+        self.refresh_display()
+    
+    def on_max_elements_change(self, event):
+        """最大表示要素数変更時の処理"""
+        try:
+            self.max_display_elements = int(self.max_elements_entry.get())
+        except ValueError:
+            pass
+    
+    def refresh_display(self):
+        """表示をリフレッシュ"""
+        if self.display_nodes is not None and self.elems is not None:
+            self.draw_mesh()
+    
+    def set_mesh_data(self, nodes, elems):
+        """メッシュデータを設定（解析用と表示用を分離）"""
+        # numpy配列であることを確認
+        if not isinstance(nodes, np.ndarray):
+            nodes = np.array(nodes)
+        
+        # 解析用メッシュ（不変）
+        self.base_nodes = nodes.copy()
+        
+        # 表示用メッシュ（変形可能）
+        self.display_nodes = nodes.copy()
+        
+        # 作業用（後方互換性のため）
+        self.nodes = self.display_nodes
+        
+        # 要素データ
+        self.elems = elems
+        
+        print(f"メッシュデータを設定: ノード{len(self.base_nodes)}個, 要素{len(self.elems)}個")
+    
+    def reset_display_mesh(self):
+        """表示用メッシュを基本メッシュにリセット"""
+        if self.base_nodes is not None:
+            self.display_nodes = self.base_nodes.copy()
+            self.nodes = self.display_nodes
+            print("表示メッシュをリセットしました")
+    
+    def get_analysis_nodes(self):
+        """解析用ノードを取得"""
+        return self.base_nodes
     
     def clear_plot(self):
         """プロット表示をクリア"""
@@ -785,11 +973,11 @@ class EnhancedFEMTool:
     
     def on_node_click(self, event):
         """ノードクリック時の処理"""
-        if self.nodes is None:
+        if self.display_nodes is None:
             return
         
         # クリックされたノードを特定
-        for i in range(len(self.nodes)):
+        for i in range(len(self.display_nodes)):
             if self.node_scatter[i] == event.artist:
                 if event.mouseevent.button == 1:  # 左クリック
                     self.handle_node_selection(i)
@@ -801,7 +989,7 @@ class EnhancedFEMTool:
     
     def on_scroll(self, event):
         """マウスホイールによる拡大縮小"""
-        if self.nodes is None:
+        if self.display_nodes is None:
             return
         
         # 現在の軸の範囲を取得
@@ -833,75 +1021,159 @@ class EnhancedFEMTool:
         
         self.canvas.draw()
     
-    def auto_scale_axes(self):
-        """XYZ軸のスケールを統一"""
-        if self.nodes is None:
-            return
-        
-        # ノードの座標範囲を取得
-        all_coords = [self.nodes]
-        
-        # 変形後の座標が存在する場合は含める
-        if hasattr(self, 'project_data') and self.project_data.displacement is not None:
-            try:
-                scale = float(self.entry_scale.get()) if hasattr(self, 'entry_scale') else 10000.0
-                deformed_nodes = np.zeros_like(self.nodes)
-                for i in range(len(self.nodes)):
-                    for j in range(3):
-                        deformed_nodes[i][j] = self.nodes[i][j] + scale * self.project_data.displacement[i][j]
-                all_coords.append(deformed_nodes)
-            except:
-                pass
-        
-        # 全座標の範囲を計算
-        all_points = np.vstack(all_coords)
-        x_coords = all_points[:, 0]
-        y_coords = all_points[:, 1]
-        z_coords = all_points[:, 2]
-        
-        # 各軸の範囲を計算
-        x_range = [x_coords.min(), x_coords.max()]
-        y_range = [y_coords.min(), y_coords.max()]
-        z_range = [z_coords.min(), z_coords.max()]
-        
-        # 各軸の幅を計算
-        x_width = x_range[1] - x_range[0]
-        y_width = y_range[1] - y_range[0]
-        z_width = z_range[1] - z_range[0]
-        
-        # 最大幅を取得
-        max_width = max(x_width, y_width, z_width)
-        
-        # 余白を追加（10%のマージン）
-        margin = max_width * 0.1
-        max_width += margin * 2
-        
-        # 各軸の中心を計算
-        x_center = (x_range[0] + x_range[1]) / 2
-        y_center = (y_range[0] + y_range[1]) / 2
-        z_center = (z_range[0] + z_range[1]) / 2
-        
-        # 統一されたスケールで各軸の範囲を設定
-        half_width = max_width / 2
-        self.ax.set_xlim(x_center - half_width, x_center + half_width)
-        self.ax.set_ylim(y_center - half_width, y_center + half_width)
-        self.ax.set_zlim(z_center - half_width, z_center + half_width)
-        
-        # アスペクト比を等しく設定（matplotlib 3D軸の制限により完全ではない）
-        self.ax.set_box_aspect([1,1,1])
-        
-        self.canvas.draw()
-    
     def reset_view(self):
         """視点をデフォルトに戻す"""
-        if self.nodes is None:
+        if self.display_nodes is None:
             return
         
         # デフォルトの視点角度に設定
         self.ax.view_init(elev=20, azim=45)
         
         # スケールも同時にリセット
-        self.auto_scale_axes()
+        if self.display_nodes is not None:
+            self.set_equal_axis_scale(self.display_nodes)
+    
+    def reset_display_scale(self):
+        """表示スケールをリセット"""
+        if self.display_nodes is not None:
+            self.set_equal_axis_scale(self.display_nodes)
+            self.canvas.draw()
+    
+    def on_tab_changed(self, event):
+        """タブ切り替え時の処理"""
+        try:
+            # 現在のタブの名前を取得
+            current_tab = self.notebook.tab(self.notebook.select(), "text")
+            
+            # タブ切り替え時に3D表示をリセット
+            self.reset_3d_display()
+            
+            # タブ固有の初期化処理
+            if current_tab == "Analysis":
+                # 解析タブに切り替わった場合、解析結果表示をクリア
+                self.clear_analysis_results()
+                # 他の解析結果テーブルもクリア
+                self.clear_other_analysis_tables()
+            elif current_tab == "Vibration":
+                # 振動解析タブに切り替わった場合、振動解析結果表示をクリア
+                self.clear_vibration_display()
+                # パラメトリック解析の結果テーブルもクリア
+                if hasattr(self, 'param_tree'):
+                    for item in self.param_tree.get_children():
+                        self.param_tree.delete(item)
+            elif current_tab == "Parametric":
+                # パラメトリック解析タブに切り替わった場合、パラメトリック表示をクリア
+                self.clear_parametric_display()
+                # 振動解析の結果テーブルもクリア
+                if hasattr(self, 'vib_tree'):
+                    for item in self.vib_tree.get_children():
+                        self.vib_tree.delete(item)
+            else:
+                # その他のタブに切り替わった場合、すべての解析結果テーブルをクリア
+                self.clear_other_analysis_tables()
+                
+        except Exception as e:
+            print(f"タブ切り替えエラー: {e}")
+    
+    def clear_other_analysis_tables(self):
+        """他の解析結果テーブルをクリア"""
+        # 振動解析の結果テーブルをクリア
+        if hasattr(self, 'vib_tree'):
+            for item in self.vib_tree.get_children():
+                self.vib_tree.delete(item)
+        
+        # パラメトリック解析の結果テーブルをクリア
+        if hasattr(self, 'param_tree'):
+            for item in self.param_tree.get_children():
+                self.param_tree.delete(item)
+    
+    def reset_3d_display(self):
+        """3D表示を基本状態にリセット"""
+        # 3D軸を完全にクリア
+        self.ax.clear()
+        self.ax.set_xlabel("X [m]")
+        self.ax.set_ylabel("Y [m]")
+        self.ax.set_zlabel("Z [m]")
+        self.ax.set_title("")  # タイトルもクリア
+        
+        # 描画リストをクリア
+        self.draw_stl_list.clear()
+        self.draw_result.clear()
+        self.node_scatter.clear()
+        self.quiver_plots.clear()
+        
+        # 表示メッシュをリセット（スケール累積を防ぐ）
+        self.reset_display_mesh()
+        
+        if self.display_nodes is not None and self.elems is not None:
+            # 基本メッシュ表示に戻す
+            self.draw_mesh()
+        else:
+            # メッシュがない場合は表示をクリア
+            self.canvas.draw()
+    
+    def clear_analysis_results(self):
+        """解析結果表示をクリア"""
+        # 変形結果表示をクリア
+        for draw in self.draw_result:
+            try:
+                draw.remove()
+            except:
+                pass
+        self.draw_result.clear()
+        
+        # 結果テキストエリアがある場合はクリア
+        if hasattr(self, 'result_text'):
+            self.result_text.delete(1.0, tk.END)
+    
+    def clear_vibration_display(self):
+        """振動解析表示をクリア"""
+        # 振動解析結果のタイトルをクリア
+        self.ax.set_title("")
+        
+        # 3D表示を完全にクリアして再描画
+        self.ax.clear()
+        self.ax.set_xlabel("X [m]")
+        self.ax.set_ylabel("Y [m]")
+        self.ax.set_zlabel("Z [m]")
+        
+        # 描画リストもクリア
+        self.draw_stl_list.clear()
+        self.draw_result.clear()
+        self.node_scatter.clear()
+        self.quiver_plots.clear()
+        
+        # 基本メッシュがある場合は再描画
+        if self.nodes is not None and self.elems is not None:
+            self.draw_mesh()
+        else:
+            self.canvas.draw()
+    
+    def clear_parametric_display(self):
+        """パラメトリック解析表示をクリア"""
+        # 3D表示を完全にクリア
+        self.ax.clear()
+        self.ax.set_xlabel("X [m]")
+        self.ax.set_ylabel("Y [m]")
+        self.ax.set_zlabel("Z [m]")
+        self.ax.set_title("")
+        
+        # 描画リストをクリア
+        self.draw_stl_list.clear()
+        self.draw_result.clear()
+        self.node_scatter.clear()
+        self.quiver_plots.clear()
+        
+        # 元の形状に戻す（スケールをリセット）
+        if hasattr(self, 'original_nodes') and self.original_nodes is not None:
+            self.nodes = self.original_nodes.copy()
+            print("パラメトリック解析: 元の形状に復帰しました")
+        
+        # メッシュを再描画
+        if self.nodes is not None and self.elems is not None:
+            self.draw_mesh()
+        else:
+            self.canvas.draw()
     
     def handle_node_selection(self, node_id):
         """ノード選択処理（複数選択対応）"""
@@ -1310,6 +1582,13 @@ class EnhancedFEMTool:
             messagebox.showerror("エラー", "メッシュが読み込まれていません")
             return
         
+        # 前回の解析結果をクリア
+        self.clear_analysis_results()
+        
+        # 振動解析の結果もクリア
+        if hasattr(self, 'vibration_results'):
+            delattr(self, 'vibration_results')
+        
         try:
             # 材料物性を取得
             young = float(self.entry_young.get())
@@ -1476,26 +1755,29 @@ class EnhancedFEMTool:
         
         self.result_text.insert(tk.END, summary)
     
-    def draw_deformed_shape(self, displacement):
+    def draw_deformed_shape(self, displacement, custom_scale=None):
         """変形後の形状を描画"""
-        if self.nodes is None or self.elems is None:
+        if self.display_nodes is None or self.elems is None:
             return
         
-        try:
-            scale = float(self.entry_scale.get())
-        except ValueError:
-            scale = 10000.0
+        if custom_scale is not None:
+            scale = custom_scale
+        else:
+            try:
+                scale = float(self.entry_scale.get())
+            except ValueError:
+                scale = 10000.0
         
         # 既存の変形結果をクリア
         for draw in self.draw_result:
             draw.remove()
         self.draw_result.clear()
         
-        # 変形後のノード座標を計算
-        deformed_nodes = np.zeros_like(self.nodes)
-        for i in range(len(self.nodes)):
+        # 変形後のノード座標を計算（表示用メッシュを使用）
+        deformed_nodes = np.zeros_like(self.display_nodes)
+        for i in range(len(self.display_nodes)):
             for j in range(3):
-                deformed_nodes[i][j] = self.nodes[i][j] + scale * displacement[i][j]
+                deformed_nodes[i][j] = self.display_nodes[i][j] + scale * displacement[i][j]
         
         # 変形後の形状を描画
         for elem in self.elems:
@@ -1509,8 +1791,9 @@ class EnhancedFEMTool:
             collection = Poly3DCollection(verts, edgecolor="blue", alpha=0.2, facecolor='lightblue')
             self.draw_result.append(self.ax.add_collection3d(collection))
         
-        # 変形後の形状を含めて自動スケール調整
-        self.auto_scale_axes()
+        # 軸スケールを統一（変形前後の両方を考慮）
+        all_nodes = np.vstack([self.display_nodes, deformed_nodes])
+        self.set_equal_axis_scale(all_nodes)
         
         self.canvas.draw()
     
@@ -1704,7 +1987,7 @@ class EnhancedFEMTool:
     
     def run_parametric_analysis(self):
         """パラメトリック解析実行"""
-        if self.nodes is None or self.elems is None:
+        if self.base_nodes is None or self.elems is None:
             messagebox.showerror("エラー", "メッシュが生成されていません。")
             return
         
@@ -1712,6 +1995,18 @@ class EnhancedFEMTool:
            (self.load_manager.edge_loads or self.load_manager.surface_loads)):
             messagebox.showerror("エラー", "荷重が設定されていません。")
             return
+        
+        # 前回の解析結果をクリア
+        self.clear_analysis_results()
+        self.clear_vibration_display()
+        
+        # 他の解析結果もクリア
+        if hasattr(self, 'vibration_results'):
+            delattr(self, 'vibration_results')
+        self.project_data.displacement = None
+        self.project_data.max_displacement = None
+        self.project_data.max_stress = None
+        self.project_data.safety_factor = None
         
         # 元の形状の体積を保存（100%スケール時の体積）
         self.original_volume = self.calculate_mesh_volume()
@@ -1731,8 +2026,8 @@ class EnhancedFEMTool:
             messagebox.showerror("エラー", "スケール設定に無効な値があります。")
             return
         
-        # 元の座標を保存
-        original_nodes = self.nodes.copy()
+        # 元の座標を保存（解析用メッシュから）
+        original_nodes = self.base_nodes.copy()
         
         # 結果テーブルをクリア
         for item in self.param_tree.get_children():
@@ -1778,12 +2073,17 @@ class EnhancedFEMTool:
                     progress_window.update()
                     
                     try:
-                        # スケール適用
-                        self.nodes = original_nodes.copy()
-                        self.apply_scale(x_scale/100, y_scale/100, z_scale/100)
+                        # スケール適用（解析用メッシュで作業）
+                        scaled_nodes = original_nodes.copy()
+                        self.apply_scale_to_nodes(scaled_nodes, x_scale/100, y_scale/100, z_scale/100)
                         
-                        # 解析実行
-                        max_stress, safety_factor, volume_ratio = self.analyze_single_case()
+                        # 解析実行（スケールされたメッシュで）
+                        result = self.analyze_single_case_with_nodes(scaled_nodes)
+                        if result[0] is not None and len(result) == 5:
+                            max_stress, safety_factor, volume_ratio, displacement, max_displacement = result
+                        else:
+                            max_stress, safety_factor, volume_ratio = result[0], result[1], result[2]
+                            displacement, max_displacement = None, None
                         
                         # 結果保存
                         results.append({
@@ -1793,7 +2093,9 @@ class EnhancedFEMTool:
                             'z_scale': z_scale,
                             'max_stress': max_stress,
                             'safety_factor': safety_factor,
-                            'volume_ratio': volume_ratio
+                            'volume_ratio': volume_ratio,
+                            'displacement': displacement,
+                            'max_displacement': max_displacement
                         })
                         
                         # テーブルに追加
@@ -1811,8 +2113,8 @@ class EnhancedFEMTool:
                         print(f"ケース {case_num} でエラー: {e}")
                         continue
         
-        # 元の形状に戻す
-        self.nodes = original_nodes
+        # 表示メッシュをリセット（元の形状に戻す）
+        self.reset_display_mesh()
         self.draw_mesh()
         
         # プログレスウィンドウを閉じる
@@ -1823,20 +2125,20 @@ class EnhancedFEMTool:
         
         messagebox.showinfo("完了", f"パラメトリック解析が完了しました。\n{len(results)}ケースの解析を実行しました。")
     
-    def apply_scale(self, x_scale, y_scale, z_scale):
-        """ノード座標にスケールを適用"""
-        if self.nodes is None:
+    def apply_scale_to_nodes(self, nodes, x_scale, y_scale, z_scale):
+        """指定されたノード座標にスケールを適用"""
+        if nodes is None:
             return
         
         # numpy配列であることを確認
-        if not isinstance(self.nodes, np.ndarray):
-            self.nodes = np.array(self.nodes)
+        if not isinstance(nodes, np.ndarray):
+            nodes = np.array(nodes)
         
         # 重心を計算
-        centroid = np.mean(self.nodes, axis=0)
+        centroid = np.mean(nodes, axis=0)
         
         # 重心を原点とした座標に変換
-        centered_nodes = self.nodes.copy() - centroid
+        centered_nodes = nodes - centroid
         
         # スケール適用
         centered_nodes[:, 0] *= float(x_scale)  # X軸
@@ -1844,7 +2146,18 @@ class EnhancedFEMTool:
         centered_nodes[:, 2] *= float(z_scale)  # Z軸
         
         # 重心を元に戻す
-        self.nodes = centered_nodes + centroid
+        nodes[:] = centered_nodes + centroid
+    
+    def apply_scale(self, x_scale, y_scale, z_scale):
+        """表示用メッシュにスケールを適用（後方互換性のため）"""
+        if self.display_nodes is None:
+            return
+        
+        # 表示用メッシュにスケール適用
+        self.apply_scale_to_nodes(self.display_nodes, x_scale, y_scale, z_scale)
+        
+        # 作業用参照を更新
+        self.nodes = self.display_nodes
     
     def analyze_single_case(self):
         """単一ケースの解析実行"""
@@ -1889,7 +2202,10 @@ class EnhancedFEMTool:
             
             # FEM解析実行
             fem = FEM(nodes, elements, boundary)
-            _, _ = fem.analysis()
+            displacement_vec, _ = fem.analysis()
+            
+            # 変位を2次元配列に変換
+            displacement = fem.outputDisplacement()
             
             # 応力計算
             max_stress, _, _ = fem.calculateMaxStress()
@@ -1900,13 +2216,84 @@ class EnhancedFEMTool:
             # 体積比計算（元の体積との比）
             volume_ratio = self.calculate_volume_ratio()
             
-            return max_stress, safety_factor, volume_ratio
+            # 変位の最大値計算
+            max_displacement = np.max([np.linalg.norm(disp) for disp in displacement])
+            
+            return max_stress, safety_factor, volume_ratio, displacement, max_displacement
             
         except Exception as e:
             import traceback
             print(f"解析エラー: {e}")
             print(f"詳細: {traceback.format_exc()}")
-            return None, None, 1.0
+            return None, None, 1.0, None, None
+    
+    def analyze_single_case_with_nodes(self, nodes):
+        """指定されたノードで単一ケースの解析実行"""
+        try:
+            # 解析実行（既存のメソッドを利用）
+            young = float(self.entry_young.get())
+            poisson = float(self.entry_poisson.get())
+            density = float(self.entry_density.get())
+            gravity = self.var_gravity.get()
+            
+            # ノードオブジェクト作成
+            node_objects = []
+            for i, coord in enumerate(nodes):
+                node_objects.append(Node(i + 1, coord[0], coord[1], coord[2]))
+            
+            # 要素オブジェクト作成
+            elements = []
+            gravity_vec = np.array([0.0, 0.0, -9.81]) if gravity else None
+            
+            for i, elem in enumerate(self.elems):
+                elem_nodes = [node_objects[j] for j in elem]
+                elements.append(C3D4(i + 1, elem_nodes, young, poisson, density, gravity_vec))
+            
+            # 境界条件作成
+            boundary = Boundary(len(node_objects))
+            
+            # 固定端設定
+            for node_id in self.project_data.fixed_nodes:
+                boundary.addSPC(node_id, 0.0, 0.0, 0.0)
+            
+            # 荷重設定
+            for force in self.project_data.applied_forces:
+                boundary.addForce(force[0], force[1], force[2], force[3])
+            
+            # LoadManagerからの荷重も適用
+            if self.load_manager:
+                equivalent_loads = self.load_manager.get_all_equivalent_point_loads()
+                for load in equivalent_loads:
+                    node_id = load[0] + 1  # ノード番号は0ベースから1ベースに変換
+                    fx, fy, fz = load[1], load[2], load[3]
+                    boundary.addForce(node_id, fx, fy, fz)
+            
+            # FEM解析実行
+            fem = FEM(node_objects, elements, boundary)
+            displacement_vec, _ = fem.analysis()
+            
+            # 変位を2次元配列に変換
+            displacement = fem.outputDisplacement()
+            
+            # 応力計算
+            max_stress, _, _ = fem.calculateMaxStress()
+            
+            # 安全率計算
+            safety_factor = self.project_data.calculate_safety_factor(max_stress, self.current_yield_strength)
+            
+            # 体積比計算（指定されたノードで）
+            volume_ratio = self.calculate_volume_ratio_with_nodes(nodes)
+            
+            # 変位の最大値計算
+            max_displacement = np.max([np.linalg.norm(disp) for disp in displacement])
+            
+            return max_stress, safety_factor, volume_ratio, displacement, max_displacement
+            
+        except Exception as e:
+            import traceback
+            print(f"解析エラー: {e}")
+            print(f"詳細: {traceback.format_exc()}")
+            return None, None, 1.0, None, None
     
     def calculate_volume_ratio(self):
         """現在の形状の体積比を計算"""
@@ -1917,15 +2304,50 @@ class EnhancedFEMTool:
         return current_volume / self.original_volume
     
     def calculate_mesh_volume(self):
-        """メッシュの体積を計算"""
-        if self.nodes is None or self.elems is None:
+        """メッシュの体積を計算（表示用メッシュを使用）"""
+        if self.display_nodes is None or self.elems is None:
             return 0.0
         
         # numpy配列であることを確認
-        if not isinstance(self.nodes, np.ndarray):
-            nodes_array = np.array(self.nodes)
+        if not isinstance(self.display_nodes, np.ndarray):
+            nodes_array = np.array(self.display_nodes)
         else:
-            nodes_array = self.nodes
+            nodes_array = self.display_nodes
+        
+        total_volume = 0.0
+        for elem in self.elems:
+            try:
+                # 四面体の体積計算
+                tetra = nodes_array[elem]
+                v1 = tetra[1] - tetra[0]
+                v2 = tetra[2] - tetra[0] 
+                v3 = tetra[3] - tetra[0]
+                volume = abs(np.dot(v1, np.cross(v2, v3))) / 6.0
+                total_volume += volume
+            except Exception as e:
+                print(f"体積計算エラー (要素 {elem}): {e}")
+                continue
+        
+        return total_volume
+    
+    def calculate_volume_ratio_with_nodes(self, nodes):
+        """指定されたノードで体積比を計算"""
+        if not hasattr(self, 'original_volume') or self.original_volume == 0:
+            return 1.0
+        
+        current_volume = self.calculate_mesh_volume_with_nodes(nodes)
+        return current_volume / self.original_volume
+    
+    def calculate_mesh_volume_with_nodes(self, nodes):
+        """指定されたノードでメッシュの体積を計算"""
+        if nodes is None or self.elems is None:
+            return 0.0
+        
+        # numpy配列であることを確認
+        if not isinstance(nodes, np.ndarray):
+            nodes_array = np.array(nodes)
+        else:
+            nodes_array = nodes
         
         total_volume = 0.0
         for elem in self.elems:
@@ -1958,11 +2380,60 @@ class EnhancedFEMTool:
         if hasattr(self, 'parametric_results'):
             result = next((r for r in self.parametric_results if r['case'] == case_num), None)
             if result:
-                # スケールを適用して表示
+                # 表示メッシュをリセットしてからスケール適用
+                self.reset_display_mesh()
                 self.apply_scale(result['x_scale']/100, result['y_scale']/100, result['z_scale']/100)
                 self.draw_mesh()
-                messagebox.showinfo("表示", f"ケース {case_num} を表示しました。\n"
+                
+                # 変形表示が可能な場合は変形も表示
+                if result.get('displacement') is not None:
+                    # 変形表示スケールの入力ダイアログを表示
+                    scale_dialog = tk.Toplevel(self.root)
+                    scale_dialog.title("変形表示スケール")
+                    scale_dialog.geometry("300x150")
+                    scale_dialog.transient(self.root)
+                    scale_dialog.grab_set()
+                    
+                    tk.Label(scale_dialog, text=f"ケース {case_num} の変形表示").pack(pady=10)
+                    tk.Label(scale_dialog, text="変形スケール倍率:").pack()
+                    
+                    scale_entry = tk.Entry(scale_dialog, width=15)
+                    scale_entry.pack(pady=5)
+                    scale_entry.insert(0, "10000")  # デフォルト値
+                    scale_entry.focus()
+                    
+                    result_ref = [result]  # クロージャ用
+                    
+                    def apply_deformation():
+                        try:
+                            deform_scale = float(scale_entry.get())
+                            self.draw_deformed_shape(result_ref[0]['displacement'], deform_scale)
+                            scale_dialog.destroy()
+                        except ValueError:
+                            messagebox.showerror("エラー", "有効な数値を入力してください")
+                    
+                    def skip_deformation():
+                        scale_dialog.destroy()
+                    
+                    button_frame = tk.Frame(scale_dialog)
+                    button_frame.pack(pady=10)
+                    tk.Button(button_frame, text="変形表示", command=apply_deformation).pack(side=tk.LEFT, padx=5)
+                    tk.Button(button_frame, text="スキップ", command=skip_deformation).pack(side=tk.LEFT, padx=5)
+                    
+                    # Enterキーで適用
+                    scale_entry.bind('<Return>', lambda e: apply_deformation())
+                    
+                    info_message = (f"ケース {case_num} を表示しました。\n"
+                                  f"スケール: X={result['x_scale']}%, Y={result['y_scale']}%, Z={result['z_scale']}%\n"
+                                  f"最大変位: {result.get('max_displacement', 'N/A'):.6f} m\n"
+                                  f"最大応力: {result['max_stress']/1e6:.2f} MPa\n"
+                                  f"安全率: {result['safety_factor']:.2f}")
+                else:
+                    info_message = (f"ケース {case_num} を表示しました。\n"
                                   f"スケール: X={result['x_scale']}%, Y={result['y_scale']}%, Z={result['z_scale']}%")
+                
+                if result.get('displacement') is None:
+                    messagebox.showinfo("表示", info_message)
     
     def export_parametric_results(self):
         """パラメトリック解析結果をCSV出力"""
@@ -1994,6 +2465,288 @@ class EnhancedFEMTool:
                             'Max_Stress[MPa]': result['max_stress']/1e6 if result['max_stress'] else 'N/A',
                             'Safety_Factor': result['safety_factor'] if result['safety_factor'] else 'N/A',
                             'Volume_Ratio': result['volume_ratio']
+                        })
+                
+                messagebox.showinfo("完了", f"CSV出力が完了しました: {filename}")
+            except Exception as e:
+                messagebox.showerror("エラー", f"CSV出力に失敗しました: {str(e)}")
+    
+    def run_vibration_analysis(self):
+        """振動解析実行"""
+        if self.base_nodes is None or self.elems is None:
+            messagebox.showerror("エラー", "メッシュが生成されていません。")
+            return
+        
+        if not self.project_data.fixed_nodes:
+            messagebox.showerror("エラー", "固定端が設定されていません。")
+            return
+        
+        # 前回の解析結果をクリア
+        self.clear_analysis_results()
+        self.clear_vibration_display()
+        
+        # 通常解析の結果もクリア
+        self.project_data.displacement = None
+        self.project_data.max_displacement = None
+        self.project_data.max_stress = None
+        self.project_data.safety_factor = None
+        
+        try:
+            num_modes = int(self.vib_num_modes.get())
+            if num_modes <= 0:
+                messagebox.showerror("エラー", "モード数は正の整数を入力してください。")
+                return
+        except ValueError:
+            messagebox.showerror("エラー", "モード数に有効な数値を入力してください。")
+            return
+        
+        try:
+            # 進捗ダイアログ表示
+            progress_window = tk.Toplevel(self.root)
+            progress_window.title("振動解析実行中")
+            progress_window.geometry("300x100")
+            progress_window.transient(self.root)
+            progress_window.grab_set()
+            
+            tk.Label(progress_window, text="振動解析を実行中...").pack(pady=20)
+            progress_window.update()
+            
+            # 材料物性を取得
+            young = float(self.entry_young.get())
+            poisson = float(self.entry_poisson.get())
+            density = float(self.entry_density.get())
+            
+            # FEM解析オブジェクトを作成（解析用メッシュを使用）
+            boundary = Boundary(len(self.base_nodes))
+            
+            # 固定端を設定
+            for node_id in self.project_data.fixed_nodes:
+                boundary.addSPC(node_id + 1, 0.0, 0.0, 0.0)
+            
+            # C3D4要素を作成（解析用メッシュを使用）
+            elems = []
+            for i, elem in enumerate(self.elems):
+                nodes = [Node(j + 1, self.base_nodes[j, 0], self.base_nodes[j, 1], self.base_nodes[j, 2]) for j in elem]
+                c3d4_elem = C3D4(i + 1, nodes, young, poisson, density)
+                elems.append(c3d4_elem)
+            
+            # ノードオブジェクトを作成（解析用メッシュを使用）
+            node_objects = [Node(i + 1, self.base_nodes[i, 0], self.base_nodes[i, 1], self.base_nodes[i, 2]) 
+                           for i in range(len(self.base_nodes))]
+            
+            # FEMオブジェクト作成
+            fem = FEM(node_objects, elems, boundary)
+            
+            # 振動解析実行
+            eigenvalues, eigenvectors, frequencies = fem.vibrationAnalysis(num_modes)
+            
+            # 結果を保存
+            self.vibration_results = {
+                'eigenvalues': eigenvalues,
+                'eigenvectors': eigenvectors,
+                'frequencies': frequencies,
+                'num_modes': num_modes
+            }
+            
+            # 結果をテーブルに表示
+            self.display_vibration_results()
+            
+            progress_window.destroy()
+            messagebox.showinfo("完了", f"振動解析が完了しました。{num_modes}個のモードを計算しました。")
+            
+        except Exception as e:
+            if 'progress_window' in locals():
+                progress_window.destroy()
+            messagebox.showerror("エラー", f"振動解析に失敗しました: {str(e)}")
+    
+    def display_vibration_results(self):
+        """振動解析結果をテーブルに表示"""
+        # テーブルをクリア
+        for item in self.vib_tree.get_children():
+            self.vib_tree.delete(item)
+        
+        if not hasattr(self, 'vibration_results'):
+            return
+        
+        frequencies = self.vibration_results['frequencies']
+        eigenvalues = self.vibration_results['eigenvalues']
+        
+        for i, freq in enumerate(frequencies):
+            mode_num = i + 1
+            freq_hz = freq
+            freq_rad = freq * 2 * np.pi
+            period = 1.0 / freq if freq > 0 else float('inf')
+            
+            self.vib_tree.insert("", "end", values=(
+                mode_num,
+                f"{freq_hz:.3f}",
+                f"{freq_rad:.3f}",
+                f"{period:.6f}" if period != float('inf') else "∞"
+            ))
+    
+    def display_selected_mode(self):
+        """選択された固有モードを可視化"""
+        selection = self.vib_tree.selection()
+        if not selection:
+            messagebox.showwarning("警告", "モードを選択してください。")
+            return
+        
+        if not hasattr(self, 'vibration_results'):
+            messagebox.showwarning("警告", "振動解析結果がありません。")
+            return
+        
+        try:
+            # 選択されたモードを取得
+            item = self.vib_tree.item(selection[0])
+            mode_num = int(item['values'][0])
+            mode_index = mode_num - 1
+            
+            if mode_index >= len(self.vibration_results['frequencies']):
+                messagebox.showerror("エラー", "無効なモードです。")
+                return
+            
+            # 固有ベクトルを取得
+            eigenvector = self.vibration_results['eigenvectors'][:, mode_index]
+            
+            # 3D表示をクリア
+            self.ax.clear()
+            
+            # 元の形状を描画（半透明）
+            self.draw_mesh_with_displacement(np.zeros_like(self.nodes), alpha=0.3, color='lightgray')
+            
+            # 変形した形状を描画（固有モード）
+            scale_factor = self.get_mode_scale_factor(eigenvector)
+            displacement = self.eigenvector_to_displacement(eigenvector) * scale_factor
+            self.draw_mesh_with_displacement(displacement, alpha=0.8, color='red')
+            
+            # タイトル設定
+            freq = self.vibration_results['frequencies'][mode_index]
+            self.ax.set_title(f"固有モード {mode_num}: {freq:.3f} Hz")
+            
+            self.ax.set_xlabel("X [m]")
+            self.ax.set_ylabel("Y [m]")
+            self.ax.set_zlabel("Z [m]")
+            
+            self.canvas.draw()
+            
+        except Exception as e:
+            messagebox.showerror("エラー", f"モード表示に失敗しました: {str(e)}")
+    
+    def eigenvector_to_displacement(self, eigenvector):
+        """固有ベクトルを変位配列に変換"""
+        displacement = np.zeros((len(self.nodes), 3))
+        for i in range(len(self.nodes)):
+            displacement[i, 0] = eigenvector[i * 3]
+            displacement[i, 1] = eigenvector[i * 3 + 1]
+            displacement[i, 2] = eigenvector[i * 3 + 2]
+        return displacement
+    
+    def get_mode_scale_factor(self, eigenvector):
+        """固有モード表示のスケールファクターを計算"""
+        # 最大変位を取得
+        max_displacement = np.max(np.abs(eigenvector))
+        if max_displacement == 0:
+            return 1.0
+        
+        # メッシュサイズを取得
+        mesh_size = np.max(self.nodes) - np.min(self.nodes)
+        
+        # 適切なスケールファクターを計算（メッシュサイズの10%程度）
+        return (mesh_size * 0.1) / max_displacement
+    
+    def draw_mesh_with_displacement(self, displacement, alpha=1.0, color='blue'):
+        """変位を考慮したメッシュ描画"""
+        if displacement is None:
+            displacement = np.zeros_like(self.nodes)
+        
+        # 変位後の節点座標
+        deformed_nodes = self.nodes + displacement
+        
+        # 要素を描画
+        for elem in self.elems:
+            tetra = deformed_nodes[elem]
+            verts = [
+                [tetra[0], tetra[1], tetra[2]],
+                [tetra[0], tetra[1], tetra[3]],
+                [tetra[0], tetra[2], tetra[3]],
+                [tetra[1], tetra[2], tetra[3]]
+            ]
+            collection = Poly3DCollection(verts, edgecolor="k", alpha=alpha, facecolor=color)
+            self.ax.add_collection3d(collection)
+        
+        # 軸スケールを統一
+        self.set_equal_axis_scale(deformed_nodes)
+    
+    def set_equal_axis_scale(self, nodes):
+        """3D表示の軸スケールを統一して実際の形状比率を保つ"""
+        if nodes is None or len(nodes) == 0:
+            return
+        
+        # 各軸の範囲を計算
+        x_min, x_max = np.min(nodes[:, 0]), np.max(nodes[:, 0])
+        y_min, y_max = np.min(nodes[:, 1]), np.max(nodes[:, 1])
+        z_min, z_max = np.min(nodes[:, 2]), np.max(nodes[:, 2])
+        
+        # 各軸の範囲を取得
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        z_range = z_max - z_min
+        
+        # 最大範囲を取得
+        max_range = max(x_range, y_range, z_range)
+        
+        # ゼロ除算を避ける
+        if max_range == 0:
+            max_range = 1.0
+        
+        # 各軸の中心を計算
+        x_center = (x_max + x_min) / 2
+        y_center = (y_max + y_min) / 2
+        z_center = (z_max + z_min) / 2
+        
+        # 統一されたスケールで軸範囲を設定
+        scale_factor = max_range / 2 * 1.1  # 10%のマージンを追加
+        
+        self.ax.set_xlim(x_center - scale_factor, x_center + scale_factor)
+        self.ax.set_ylim(y_center - scale_factor, y_center + scale_factor)
+        self.ax.set_zlim(z_center - scale_factor, z_center + scale_factor)
+        
+        # アスペクト比を統一
+        self.ax.set_box_aspect([1,1,1])
+    
+    def export_vibration_results(self):
+        """振動解析結果をCSV出力"""
+        if not hasattr(self, 'vibration_results'):
+            messagebox.showwarning("警告", "振動解析結果がありません。")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            title="振動解析結果をCSV保存",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                import csv
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['Mode', 'Frequency_Hz', 'Angular_Frequency_rad_s', 'Period_s']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    writer.writeheader()
+                    
+                    frequencies = self.vibration_results['frequencies']
+                    for i, freq in enumerate(frequencies):
+                        mode_num = i + 1
+                        freq_hz = freq
+                        freq_rad = freq * 2 * np.pi
+                        period = 1.0 / freq if freq > 0 else float('inf')
+                        
+                        writer.writerow({
+                            'Mode': mode_num,
+                            'Frequency_Hz': f"{freq_hz:.6f}",
+                            'Angular_Frequency_rad_s': f"{freq_rad:.6f}",
+                            'Period_s': f"{period:.6f}" if period != float('inf') else "infinity"
                         })
                 
                 messagebox.showinfo("完了", f"CSV出力が完了しました: {filename}")

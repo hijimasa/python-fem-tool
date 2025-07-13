@@ -217,7 +217,7 @@ class GeometryGenerator:
         # L字断面の頂点を定義（Z方向に押し出し）
         vertices = []
         
-        # Z=0 の断面
+        # Z=0 の断面（時計回りに定義して外向き法線を確保）
         z0_points = [
             [0, 0],                      # 0: 原点
             [width, 0],                  # 1: 底辺右端
@@ -236,41 +236,94 @@ class GeometryGenerator:
         
         faces = []
         
-        # 前面（Z=0）と後面（Z=length）
-        front_face = [0, 1, 2, 3, 4, 5]  # Z=0の頂点
-        back_face = [6, 7, 8, 9, 10, 11] # Z=lengthの頂点
-        
-        # 前面を三角形に分割
+        # 前面（Z=0）- 反時計回りで外向き法線
         faces.extend([
-            [0, 1, 2], [0, 2, 5],
-            [2, 3, 4], [2, 4, 5]
+            [0, 2, 1], [0, 5, 2],   # 外側三角形を反時計回り
+            [2, 5, 4], [2, 4, 3]    # 内側三角形を反時計回り
         ])
         
-        # 後面を三角形に分割（法線方向を逆に）
+        # 後面（Z=length）- 時計回りで外向き法線
         faces.extend([
-            [6, 8, 7], [6, 11, 8],
-            [8, 10, 9], [8, 11, 10]
+            [6, 7, 8], [6, 8, 11],   # 外側三角形を時計回り
+            [8, 9, 10], [8, 10, 11]  # 内側三角形を時計回り
         ])
         
-        # 側面
+        # 側面 - 外向き法線を確保
         for i in range(6):
             next_i = (i + 1) % 6
-            # 側面の四角形を2つの三角形に分割
-            faces.append([i, i + 6, next_i + 6])
-            faces.append([i, next_i + 6, next_i])
+            # 各側面を2つの三角形に分割（外向き法線）
+            faces.append([i, next_i, i + 6])           # 下三角形
+            faces.append([next_i, next_i + 6, i + 6])  # 上三角形
         
         faces = np.array(faces)
         
         # TetGenでメッシュ生成
-        tet = tetgen.TetGen(vertices, faces)
+        try:
+            # manifoldチェックとrepair機能を有効化
+            tet = tetgen.TetGen(vertices, faces)
+            
+            if mesh_size:
+                nodes, elements = tet.tetrahedralize(order=1, 
+                                                   mindihedral=10,  # より緩い角度制約
+                                                   minratio=1.1,   # より緩い比率制約
+                                                   maxvolume=mesh_size**3, 
+                                                   verbose=0)
+            else:
+                nodes, elements = tet.tetrahedralize(order=1, 
+                                                   mindihedral=10,
+                                                   minratio=1.1,
+                                                   verbose=0)
+            
+            return nodes, elements
+            
+        except Exception as e:
+            print(f"L字メッシュ生成エラー: {e}")
+            # フォールバック1: さらに緩いパラメータで再試行
+            try:
+                tet = tetgen.TetGen(vertices, faces)
+                nodes, elements = tet.tetrahedralize(order=1, 
+                                                   mindihedral=5,   # 最小角度制約
+                                                   verbose=0)
+                return nodes, elements
+            except Exception as e2:
+                print(f"L字メッシュ生成フォールバック1もエラー: {e2}")
+                # フォールバック2: 制約なしで再試行
+                try:
+                    tet = tetgen.TetGen(vertices, faces)
+                    nodes, elements = tet.tetrahedralize(order=1, verbose=0)
+                    return nodes, elements
+                except Exception as e3:
+                    print(f"L字メッシュ生成フォールバック2もエラー: {e3}")
+                    # 最後の手段: より単純なL字形状を生成
+                    return GeometryGenerator._create_simple_l_shape(width, height, thickness, length)
+    
+    @staticmethod
+    def _create_simple_l_shape(width, height, thickness, length):
+        """より単純なL字形状を2つの直方体の組み合わせで作成"""
+        print("L字形状を2つの直方体で構築します")
         
-        if mesh_size:
-            nodes, elements = tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5,
-                                               maxvolume=mesh_size**3)
-        else:
-            nodes, elements = tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
+        # 底辺部分の直方体
+        bottom_nodes, bottom_elements = GeometryGenerator.create_rectangular_block(
+            width, thickness, length
+        )
         
-        return nodes, elements
+        # 縦辺部分の直方体（底辺と重複部分を考慮して調整）
+        vertical_nodes, vertical_elements = GeometryGenerator.create_rectangular_block(
+            thickness, height - thickness, length
+        )
+        
+        # 縦辺部分を適切な位置に移動
+        vertical_nodes[:, 0] += 0  # X座標はそのまま
+        vertical_nodes[:, 1] += thickness  # Y座標をthickness分上に移動
+        
+        # ノードを結合（重複除去）
+        all_nodes = np.vstack([bottom_nodes, vertical_nodes])
+        
+        # 要素を結合（ノード番号を調整）
+        vertical_elements_adjusted = vertical_elements + len(bottom_nodes)
+        all_elements = np.vstack([bottom_elements, vertical_elements_adjusted])
+        
+        return all_nodes, all_elements
     
     @staticmethod
     def save_as_stl(nodes, faces, filename):

@@ -163,3 +163,4 @@ cython_debug/
 
 analysis_result.txt
 *.html
+_skipped*

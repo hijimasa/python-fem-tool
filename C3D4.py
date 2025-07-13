@@ -171,4 +171,30 @@ class C3D4:
         )
         
         return stress_vector, von_mises_stress
+    
+    def makeMematrix(self):
+        """要素質量マトリクスMe（consistent mass matrix）を作成する"""
+        
+        # ヤコビ行列を計算する
+        matJ = self.makeJmatrix()
+        
+        # 形状関数行列を作成（4節点四面体要素）
+        # 積分点での形状関数値
+        N1 = 1 - self.ai - self.bi - self.ci  # = 1/4
+        N2 = self.ai                          # = 1/4
+        N3 = self.bi                          # = 1/4
+        N4 = self.ci                          # = 1/4
+        
+        # 形状関数行列 N (3×12)
+        matN = np.array([
+            [N1, 0.0, 0.0, N2, 0.0, 0.0, N3, 0.0, 0.0, N4, 0.0, 0.0],
+            [0.0, N1, 0.0, 0.0, N2, 0.0, 0.0, N3, 0.0, 0.0, N4, 0.0],
+            [0.0, 0.0, N1, 0.0, 0.0, N2, 0.0, 0.0, N3, 0.0, 0.0, N4]
+        ])
+        
+        # 質量マトリクスをガウス積分で計算: Me = ∫ ρ N^T N dV
+        # ρ: 密度, w: 重み係数, det(J): ヤコビアン
+        matMe = self.w * self.density * (matN.T @ matN) * LA.det(matJ)
+        
+        return matMe
 

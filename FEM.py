@@ -274,5 +274,76 @@ class FEM:
                 max_element_id = element.no
         
         return max_stress, max_element_id, all_stresses
+    
+    def makeMmatrix(self):
+        """全体質量マトリクスMを作成する"""
+        
+        matM = np.matrix(np.zeros((len(self.nodes) * self.nodeDof, len(self.nodes) * self.nodeDof)))
+        
+        for elem in self.elements:
+            # 要素質量マトリクスを計算する
+            matMe = elem.makeMematrix()
+            
+            # 全体質量マトリクスに代入する
+            for c in range(len(elem.nodes) * self.nodeDof):
+                ct = (elem.nodes[c // self.nodeDof].no - 1) * self.nodeDof + c % self.nodeDof
+                for r in range(len(elem.nodes) * self.nodeDof):
+                    rt = (elem.nodes[r // self.nodeDof].no - 1) * self.nodeDof + r % self.nodeDof
+                    matM[ct, rt] += matMe[c, r]
+        
+        return matM
+    
+    def vibrationAnalysis(self, num_modes=10):
+        """振動解析（固有値問題）を実行
+        
+        Args:
+            num_modes: 解析するモード数
+            
+        Returns:
+            eigenvalues: 固有値（角振動数の2乗）
+            eigenvectors: 固有ベクトル（固有モード）
+            frequencies: 固有振動数 [Hz]
+        """
+        
+        # 全体剛性マトリクスと質量マトリクスを作成
+        matK = self.makeKmatrix()
+        matM = self.makeMmatrix()
+        
+        # 境界条件を適用（自由度を削減）
+        # 固定端の自由度を除去
+        vecBoundDisp = self.bound.makeDispVector()
+        free_dofs = []
+        
+        for i in range(len(vecBoundDisp)):
+            if vecBoundDisp[i] is None:  # 自由な自由度
+                free_dofs.append(i)
+        
+        if len(free_dofs) == 0:
+            raise ValueError("全ての自由度が拘束されています。振動解析できません。")
+        
+        # 自由な自由度のみ抽出
+        K_free = np.array(matK)[np.ix_(free_dofs, free_dofs)]
+        M_free = np.array(matM)[np.ix_(free_dofs, free_dofs)]
+        
+        # 一般化固有値問題を解く: K φ = λ M φ
+        # scipy.linalg.eighを使用（対称行列用）
+        from scipy.linalg import eigh
+        
+        try:
+            # 固有値・固有ベクトルを計算（最小のnum_modes個）
+            eigenvalues, eigenvectors = eigh(K_free, M_free, subset_by_index=[0, num_modes-1])
+            
+            # 固有振動数を計算 [Hz]
+            frequencies = np.sqrt(np.maximum(eigenvalues, 0)) / (2 * np.pi)
+            
+            # 固有ベクトルを全自由度に拡張
+            full_eigenvectors = np.zeros((len(self.nodes) * self.nodeDof, len(eigenvalues)))
+            for i, dof in enumerate(free_dofs):
+                full_eigenvectors[dof, :] = eigenvectors[i, :]
+            
+            return eigenvalues, full_eigenvectors, frequencies
+            
+        except Exception as e:
+            raise ValueError(f"固有値解析に失敗しました: {str(e)}")
         
 
